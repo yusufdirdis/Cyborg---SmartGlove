@@ -517,7 +517,7 @@ def move_live(moves: list[tuple[int, int, int]], stopped: bool,
 
 
 def enable_torque(servo_ids: list[int], stopped: bool) -> dict:
-    """Enable torque only for selected, healthy, stationary position servos."""
+    """Align selected torque-off servos to their present positions, then enable torque."""
     if not 1 <= len(servo_ids) <= 6 or len(set(servo_ids)) != len(servo_ids) or any(
         servo_id not in range(1, 7) for servo_id in servo_ids
     ):
@@ -526,18 +526,35 @@ def enable_torque(servo_ids: list[int], stopped: bool) -> dict:
         raise HardwareControlError("Physical control is disabled or software stop is latched.")
     try:
         with _driver(lock_timeout=2.0) as driver:
+            snapshots = {}
             for servo_id in servo_ids:
                 snapshot = read_snapshot(driver, servo_id)
                 if snapshot.model != 777 or snapshot.mode != 0:
                     raise HardwareControlError(f"Servo {servo_id} is not available in position mode.")
                 if snapshot.moving != 0:
                     raise HardwareControlError(f"Servo {servo_id} is moving; wait for it to stop before enabling torque.")
-                if snapshot.position is None or snapshot.goal_position is None or abs(snapshot.goal_position - snapshot.position) > 10:
-                    raise HardwareControlError(f"Servo {servo_id}'s stored target is not near its current position; torque was not enabled.")
+                if snapshot.torque_enabled != 0:
+                    raise HardwareControlError(f"Servo {servo_id} torque is already on or unavailable; no torque changes were made.")
+                if snapshot.position is None or not 0 <= snapshot.position <= 4000 or snapshot.goal_position is None:
+                    raise HardwareControlError(f"Servo {servo_id} has an invalid current or stored position; torque was not enabled.")
                 if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
                     raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
                 if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
                     raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
+                snapshots[servo_id] = snapshot
+            # A torque-off servo can retain a stale goal count. Replace that goal
+            # with its live position first, preventing torque-on from pulling it
+            # toward an old target. This writes no movement command.
+            aligned_ids = []
+            for servo_id, snapshot in snapshots.items():
+                if snapshot.goal_position != snapshot.position:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        if driver.writeReg(servo_id, 42, snapshot.position) is not True:
+                            raise HardwareControlError(f"Could not align Servo {servo_id}'s stored target; torque was not enabled.")
+                        aligned = driver.readReg(servo_id, 42)
+                    if aligned != snapshot.position:
+                        raise HardwareControlError(f"Servo {servo_id}'s stored target did not verify; torque was not enabled.")
+                    aligned_ids.append(servo_id)
             for servo_id in servo_ids:
                 with contextlib.redirect_stdout(io.StringIO()):
                     if driver.writeReg(servo_id, 40, 1) is not True:
@@ -547,7 +564,8 @@ def enable_torque(servo_ids: list[int], stopped: bool) -> dict:
                     raise HardwareControlError(f"Servo {servo_id} did not confirm torque enabled.")
     except BenchJogError as exc:
         raise HardwareControlError(str(exc)) from exc
-    return {"enabled_ids": servo_ids, "message": "Torque enabled for selected servos."}
+    return {"enabled_ids": servo_ids, "aligned_ids": aligned_ids,
+            "message": "Stored targets aligned to current positions; torque enabled for selected servos."}
 
 
 def disable_torque() -> dict:

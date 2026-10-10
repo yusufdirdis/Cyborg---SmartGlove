@@ -17,14 +17,17 @@ def measured_calibration():
 
 class FakeDriver:
     calls = []
+    initial_goals = None
+    initial_torque = None
 
     def __init__(self):
         self.packetHandler = self
         self.porthandler = type("Port", (), {"is_open": False})()
         self.groupSyncWrite = self
         self.queued = []
-        self.torque = {servo_id: 1 for servo_id in range(1, 7)}
+        self.torque = dict({servo_id: 1 for servo_id in range(1, 7)} if type(self).initial_torque is None else type(self).initial_torque)
         self.positions = {servo_id: 1000 for servo_id in range(1, 7)}
+        self.goals = dict(self.positions if type(self).initial_goals is None else type(self).initial_goals)
 
     def openSerialPort(self, port, baudrate, servoFamily):
         self.calls.append(("open", port))
@@ -41,7 +44,7 @@ class FakeDriver:
 
     def readReg(self, servo_id, address):
         self.calls.append(("read", servo_id, address))
-        return {56: self.positions[servo_id], 42: self.positions[servo_id], 62: 124,
+        return {56: self.positions[servo_id], 42: self.goals[servo_id], 62: 124,
                 63: 35, 66: 0, 33: 0}.get(address, self.torque[servo_id] if address == 40 else None)
 
     def WritePosEx(self, servo_id, target, speed, acceleration):
@@ -67,13 +70,19 @@ class FakeDriver:
         self.calls.append(("write", servo_id, address, value))
         if address == 40:
             self.torque[servo_id] = value
+        elif address == 42:
+            self.goals[servo_id] = value
         return True
 
 
 @pytest.fixture
 def fake_controller(monkeypatch):
     FakeDriver.calls = []
+    FakeDriver.initial_goals = None
+    FakeDriver.initial_torque = None
     control.clear_pending()
+    FakeDriver.initial_goals = None
+    FakeDriver.initial_torque = None
     monkeypatch.setattr(control, "FeetechTuna", FakeDriver)
     monkeypatch.setattr(control, "_port", lambda: ("/dev/cu.fake", None))
     monkeypatch.setattr(control, "LIVE_MOVE_INITIAL_WAIT_SECONDS", 0)
@@ -347,11 +356,27 @@ def test_live_edit_allows_raw_targets_without_calibration_but_obeys_stop(fake_co
 
 def test_torque_enable_is_explicit_and_verified(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    FakeDriver.initial_torque = {servo_id: 0 for servo_id in range(1, 7)}
     result = control.enable_torque([4, 5, 6], False)
     assert result["enabled_ids"] == [4, 5, 6]
     assert [call for call in fake_controller if call[0] == "write"] == [
         ("write", 4, 40, 1), ("write", 5, 40, 1), ("write", 6, 40, 1)
     ]
+
+
+def test_torque_enable_aligns_stale_goals_before_torque_on(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    FakeDriver.initial_goals = {servo_id: 4000 for servo_id in range(1, 7)}
+    FakeDriver.initial_torque = {servo_id: 0 for servo_id in range(1, 7)}
+    result = control.enable_torque([1, 5, 6], False)
+    assert result["enabled_ids"] == [1, 5, 6]
+    assert result["aligned_ids"] == [1, 5, 6]
+    writes = [call for call in fake_controller if call[0] == "write"]
+    assert writes == [
+        ("write", 1, 42, 1000), ("write", 5, 42, 1000), ("write", 6, 42, 1000),
+        ("write", 1, 40, 1), ("write", 5, 40, 1), ("write", 6, 40, 1),
+    ]
+    assert not any(call[0] in ("move", "queue", "sync_packet") for call in fake_controller)
 
 
 def test_live_api_sends_selected_targets_without_confirmation(fake_controller, monkeypatch, tmp_path):
@@ -374,6 +399,7 @@ def test_live_api_sends_selected_targets_without_confirmation(fake_controller, m
 
 def test_torque_enable_api_is_local_and_explicit(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    FakeDriver.initial_torque = {servo_id: 0 for servo_id in range(1, 7)}
     with TestClient(app) as client:
         response = client.post("/api/hardware/torque/enable", json={"servo_ids": [4, 5, 6]})
         assert response.status_code == 200
