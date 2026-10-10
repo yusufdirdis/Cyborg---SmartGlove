@@ -9,7 +9,6 @@ type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',st
 type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
 type Status = {mode:string,positions:Record<number,number>,target:Record<number,number>,stopped:boolean,playing:boolean,last_event:string,vision:{label:string,confidence:number,source:string}|null,devices:Record<string,string>}
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
-type JogPreview = {servo_id:number,start:number,target:number,delta:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 type HardwareControlInfo = {writes_enabled:boolean,step_counts:number,position_speed_min:number,position_speed_max:number,position_speed_default:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
 const servoMounts = [
@@ -53,12 +52,12 @@ function App(){
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={status.positions}/>}
     {page==='AI Vision'&&<Vision/>}
 
-    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware} action={action}/>}
+    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware}/>}
    </main>
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Adjust physical servo targets live.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Devices:'See live servo status and check small movement commands.'}
+const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Adjust physical servo targets live.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Devices:'See connected devices and live servo status.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 function HandGraphic(){
@@ -183,28 +182,7 @@ function Vision(){
  }
  return <div className="vision-preview"><div className="card p-5 md:p-6"><div className="flex justify-between items-start mb-4"><div><Eyebrow>Camera input</Eyebrow><h2 className="text-xl font-bold mt-1">Live preview</h2></div><Pill tone={camera?'green':'gray'}>{camera?'Browser camera':'Camera off'}</Pill></div><div className="aspect-video rounded-2xl bg-[#172d29] grid place-items-center overflow-hidden relative"><video ref={video} autoPlay playsInline muted className={`w-full h-full object-cover ${camera?'':'hidden'}`}/>{!camera&&<div className="text-center text-[#97b7a9]"><Camera className="mx-auto mb-3" size={36}/><div className="font-bold">No camera preview</div><div className="text-xs mt-1">Connect a browser camera to view its feed</div></div>}<span className="absolute left-4 bottom-4 rounded-full bg-[#152d29]/80 text-white text-[10px] px-3 py-1.5 font-bold">NO OBJECT DETECTOR RUNNING</span></div>{cameraError&&<p className="text-red-600 text-xs mt-2">{cameraError}</p>}<button className="btn btn-primary mt-4" onClick={toggle}>{camera?'Stop preview':'Start camera preview'}</button><p className="text-xs text-[#849087] mt-3">Camera video stays in this browser. The preview does not analyze frames or identify objects.</p></div></div>
 }
-function Devices({status,hardware,scan,action}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>}){
- const [servoId,setServoId]=useState(1)
- const [delta,setDelta]=useState<10|-10>(10)
- const [preview,setPreview]=useState<JogPreview|null>(null)
- const [phrase,setPhrase]=useState('')
- const [offBody,setOffBody]=useState(false)
- const [powerCut,setPowerCut]=useState(false)
- const [cordClear,setCordClear]=useState(false)
- const [busy,setBusy]=useState(false)
- const check=async()=>{
-  setBusy(true);setPreview(null);setPhrase('')
-  try{const result=await action(()=>api<JogPreview>('/hardware/jog/preview',{method:'POST',body:json({servo_id:servoId,delta})}));if(result)setPreview(result)}finally{setBusy(false)}
- }
- const send=async()=>{
-  if(!preview?.token)return
-  setBusy(true)
-  try{
-   const result=await action(()=>api<{accepted:boolean}>('/hardware/jog/execute',{method:'POST',body:json({token:preview.token,phrase,off_body:offBody,power_cut_tested:powerCut,cord_path_clear:cordClear})}),'One 10-count command sent. Refresh status before another move.')
-   setPreview(null);setPhrase('');setOffBody(false);setPowerCut(false);setCordClear(false)
-   if(result)await scan()
-  }finally{setBusy(false)}
- }
+function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'
  const items=[
   {name:'Servo controller',state:controllerState,detail:'USB connection and live position',Icon:Cpu},
@@ -221,26 +199,6 @@ function Devices({status,hardware,scan,action}:{status:Status,hardware:HardwareS
     return <div key={id} className="rounded-xl border border-[#e8ece8] px-4 py-3 flex justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.12em] font-bold text-[#839187]">{location}</div><b className="text-sm">ID {id}</b><span className="text-xs text-[#839187] ml-2">{servos[id-1]}</span></div><div className="text-right text-xs text-[#63796a]">{servo?<><b className="text-[#1e4937]">{servo.position??'—'} counts</b><div>{servo.voltage_v?.toFixed(1)??'—'} V · {servo.temperature_c??'—'}°C</div><div>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`} · {servo.torque_enabled==null?'Torque unknown':servo.torque_enabled?'Torque on':'Torque off'}</div></>:<span>No response</span>}</div></div>
    })}</div>
    <p className="text-xs text-[#839187] mt-4">Status reads do not move the glove. Direct position controls are on Manual Control; saved gestures still run in simulation.</p>
-  </div>
-  <div className="card p-5 max-w-[1040px]">
-   <Eyebrow>Direct servo control</Eyebrow><h2 className="text-xl font-bold mt-1">Small movement test</h2>
-   <p className="text-sm text-[#63796a] mt-2 leading-6">Check one 10-count step using the same Feetech controller code as the terminal test. The preview reads the motor and shows its target without moving it. Physical movement stays locked until this servo has measured limits and hardware control is enabled.</p>
-   <div className="grid sm:grid-cols-[1fr_1fr_auto] gap-3 mt-5 items-end">
-    <label className="text-xs font-bold text-[#6b7f72]">Servo<select className="field mt-1" value={servoId} onChange={e=>{setServoId(Number(e.target.value));setPreview(null)}}>{servoMounts.map(({id,location})=><option key={id} value={id}>ID {id} · {servos[id-1]} · {location}</option>)}</select></label>
-    <label className="text-xs font-bold text-[#6b7f72]">Direction<select className="field mt-1" value={delta} onChange={e=>{setDelta(Number(e.target.value) as 10|-10);setPreview(null)}}><option value={10}>+10 counts</option><option value={-10}>−10 counts</option></select></label>
-    <button className="btn btn-secondary" disabled={busy} onClick={check}>{busy?'Checking…':'Check move'}</button>
-   </div>
-   {preview&&<div className="rounded-xl border border-[#dce9df] bg-[#f8faf7] p-4 mt-4"><div className="text-sm font-bold">ID {preview.servo_id}: {preview.start} → {preview.target} counts</div><p className="text-xs text-[#63796a] mt-1">This is a {preview.delta>0?'+10':'−10'} count proposal. No command was sent.</p>
-    {preview.blocked_reason?<div className="text-sm text-[#976a20] mt-3">{preview.blocked_reason}</div>:<div className="mt-4 space-y-3">
-     <p className="text-xs text-[#63796a]">This preview expires in 30 seconds. Keep the glove off your hand and use the independent power cutoff if movement is unexpected.</p>
-     <label className="block text-xs"><input type="checkbox" checked={offBody} onChange={e=>setOffBody(e.target.checked)} className="mr-2"/>The glove is off my hand.</label>
-     <label className="block text-xs"><input type="checkbox" checked={powerCut} onChange={e=>setPowerCut(e.target.checked)} className="mr-2"/>I tested the physical servo power cutoff for this session.</label>
-     <label className="block text-xs"><input type="checkbox" checked={cordClear} onChange={e=>setCordClear(e.target.checked)} className="mr-2"/>The cord path is clear and this step stays within measured travel.</label>
-     <label className="block text-xs font-bold text-[#6b7f72]">Type {preview.phrase} to confirm<input className="field mt-1" value={phrase} onChange={e=>setPhrase(e.target.value)} autoComplete="off"/></label>
-     <button className="btn btn-primary" disabled={busy||status.stopped||!offBody||!powerCut||!cordClear||phrase.trim()!==preview.phrase} onClick={send}>Send one small move</button>
-    </div>}
-   </div>}
-   <p className="text-xs text-[#839187] mt-4">The app never enables torque automatically or runs the terminal scripts’ multi-servo and return-home commands. Stop latches software control and attempts torque-off only when hardware writes are enabled; the physical power cutoff remains the reliable stop.</p>
   </div>
  </div>
 }

@@ -54,7 +54,7 @@ Manual Control contains only live physical servo position and speed controls. Mo
 
 ## Read-only controller status
 
-Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros and percentage sliders remain simulation only.
+Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros remain simulation only.
 
 The website does not expose a Calibration page. Existing measured servo limits remain stored in SQLite and are checked by live motor control. If limits need changing, update them through the local API after physically measuring the servo travel.
 
@@ -64,9 +64,7 @@ The website does not expose a Calibration page. Existing measured servo limits r
 
 On 2026-10-10, a supervised terminal test sent one Servo 1 command from 1004 to 1250 at requested speed 2400 and acceleration 50. It settled at 1248 in about 0.5 seconds. This does not establish the speed or safe travel of other channels or simultaneous moves. Start at a lower setting for channels whose response has not been observed. The manufacturer's [STS3215 specifications](https://www.feetechrc.com/525603.html) describe the servo's 12 V position control and higher no-load speed; 2400 is a requested controller speed, not a guarantee of actual glove speed.
 
-**Devices → Small movement test** connects the terminal bench test's read-only preflight to the website. Select one servo and either +10 or −10 counts, then choose **Check move**. The website reads the actual servo and shows the current count and proposed target. This preview never sends a motor command. It checks the ST3215 model, position mode, torque state, stored target, voltage, temperature, moving state, and count margins through the supplied Feetech library.
-
-Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits to move motors. Saved measured limits and device-health checks remain enforced for every edited servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors. The separate Devices small-step test retains its own confirmation flow.
+Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits to move motors. Saved measured limits and device-health checks remain enforced for every edited servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors.
 
 When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
 
@@ -86,7 +84,7 @@ The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and commo
 
 ## Safety boundary
 
-The percentage sliders, saved gestures, and vision events remain **simulation only**. Manual Control's raw-count targets are live physical controls when writes are enabled; Devices' 10-count test is a separate confirmed movement route. The live route checks saved travel bounds, position mode, torque, voltage, temperature, and Stop before every sync packet. The UI has no per-move confirmation, so edit physical targets only with the glove off-body and the independent power cutoff ready.
+Saved gestures and vision events remain **simulation only**. Manual Control's raw-count targets are live physical controls when writes are enabled. The live route checks saved travel bounds, position mode, torque, voltage, temperature, and Stop before every sync packet. The UI has no per-move confirmation, so edit physical targets only with the glove off-body and the independent power cutoff ready.
 
 The physical power cutoff must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their broad movement commands are not exposed by the website.
 
