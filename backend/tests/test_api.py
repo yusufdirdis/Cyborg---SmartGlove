@@ -1,9 +1,12 @@
+import json
 import os
+import sqlite3
 from pathlib import Path
 
 os.environ["HANDOS_DB"] = str(Path(__file__).parent / "test.sqlite3")
 
 from fastapi.testclient import TestClient
+from app import main as main_module
 from app.main import app
 from app.main import CalibrationInput
 from app.hardware_boundary import ActuationApproval, gated_counts
@@ -24,10 +27,52 @@ def test_macro_round_trip_and_import_export():
         payload["name"] = "Edited wave"
         assert client.put(f"/api/macros/{macro_id}", json=payload).json()["name"] == "Edited wave"
         exported = client.get("/api/macros/export").json()
-        assert exported["version"] == 1
+        assert exported["version"] == 2
         assert any(m["name"] == "Edited wave" for m in exported["macros"])
-        assert client.post("/api/macros/import", json={"version": 1, "macros": [payload]}).json() == {"imported": 1}
+        assert client.post("/api/macros/import", json={"version": 2, "macros": [payload]}).json() == {"imported": 1}
         assert client.delete(f"/api/macros/{macro_id}").status_code == 204
+
+
+def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
+    with TestClient(app) as client:
+        assert client.get("/api/servos").json() == [
+            {"id": 1, "name": "Pinky finger"},
+            {"id": 2, "name": "Ring finger"},
+            {"id": 3, "name": "Middle finger"},
+            {"id": 4, "name": "Index finger"},
+            {"id": 5, "name": "Thumb flexion (up/down)"},
+            {"id": 6, "name": "Thumb side-to-side"},
+        ]
+        old_positions = {str(i): i * 10 for i in range(1, 7)}
+        payload = {"version": 1, "macros": [{"name": "Legacy mapping check", "description": "", "kind": "pose", "steps": [{"positions": old_positions, "duration_ms": 700}]}]}
+        assert client.post("/api/macros/import", json=payload).json() == {"imported": 1}
+        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Legacy mapping check")
+        assert imported["steps"][0]["positions"] == {"1": 60, "2": 50, "3": 20, "4": 10, "5": 30, "6": 40}
+
+
+def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeypatch):
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
+        old_step = [{"positions": {str(i): i * 10 for i in range(1, 7)}, "duration_ms": 700}]
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("old", "Old gesture", "", "pose", json.dumps(old_step), 1.0, 1.0))
+    monkeypatch.setattr(main_module, "DB_PATH", path)
+    main_module.init_db()
+    main_module.init_db()
+    with main_module.db() as conn:
+        stored = json.loads(conn.execute("SELECT steps FROM macros WHERE id='old'").fetchone()[0])
+        assert stored[0]["positions"] == {"1": 60, "2": 50, "3": 20, "4": 10, "5": 30, "6": 40}
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_fresh_sample_gestures_use_correct_finger_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "fresh.sqlite3")
+    main_module.init_db()
+    with main_module.db() as conn:
+        point = json.loads(conn.execute("SELECT steps FROM macros WHERE name='Point'").fetchone()[0])[0]["positions"]
+        pinch = json.loads(conn.execute("SELECT steps FROM macros WHERE name='Pinch'").fetchone()[0])[0]["positions"]
+    assert point == {"1": 80, "2": 80, "3": 80, "4": 0, "5": 75, "6": 55}
+    assert pinch == {"1": 0, "2": 0, "3": 0, "4": 45, "5": 55, "6": 75}
 
 
 def test_stop_latches_and_reset_allows_simulation():

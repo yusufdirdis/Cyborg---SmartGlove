@@ -6,14 +6,14 @@ A local, simulation-first control studio for a six-servo smart-glasses hand glov
 
 | ID | Movement |
 |---|---|
-| 1 | Index finger |
-| 2 | Middle finger |
-| 3 | Thumb flexion |
-| 4 | Thumb opposition |
-| 5 | Ring finger |
-| 6 | Pinky finger |
+| 1 | Pinky finger |
+| 2 | Ring finger |
+| 3 | Middle finger |
+| 4 | Index finger |
+| 5 | Thumb flexion (up/down) |
+| 6 | Thumb opposition (side to side) |
 
-The attached hardware PDF contains older wrist assignments as well as this newer individual-finger layout. handoff follows the newer six-servo layout. Its suggested servo counts also vary between sections, so all displayed calibration counts start **unverified**. They are placeholders, not commands or recommended physical limits.
+This ID mapping was supplied by the glove builder after all six servos responded to a read-only status check. Earlier documents and app releases used a different order. Saved gestures are remapped once during database upgrade so their finger meaning stays the same; calibration counts remain attached to their physical servo IDs. The displayed calibration counts are still **unverified** placeholders, not commands or recommended physical limits.
 
 ## Run locally
 
@@ -39,7 +39,7 @@ npm run dev -- --port 5173
 
 Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>. The Vite server proxies `/api` and `/ws` to the local API. Keep both terminals running.
 
-On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a versioned JSON file; importing adds copies of its macros. Sequences have up to 30 steps with 100–10,000 ms duration per step.
+On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 2 JSON file; importing adds copies of its macros. Older version 1 exports are accepted and remapped to the corrected finger IDs. Sequences have up to 30 steps with 100–10,000 ms duration per step.
 
 ## Try the first milestone
 
@@ -74,11 +74,11 @@ cd backend && .venv/bin/python -m pytest -q
 cd ../frontend && npm run build
 ```
 
-The first build passed with five backend tests. The UI was also opened in a browser, where saving and playing a new pose updated the simulated hand. The frontend's current Tailwind 3 build dependencies have seven npm audit advisories (five high, two moderate), all in build tooling. Keep this development server bound to localhost and upgrade the build toolchain before any public deployment.
+The current build passes nine backend tests and the frontend build. The UI was also opened in a browser, where saving and playing a new pose updated the simulated hand. The frontend's current Tailwind 3 build dependencies have seven npm audit advisories (five high, two moderate), all in build tooling. Keep this development server bound to localhost and upgrade the build toolchain before any public deployment.
 
 ## Integration next steps
 
-1. Confirm the finger associated with each physical ID. The current read-only status check confirms IDs 1–6 respond; it does not prove their finger assignments.
+1. Verify the builder-supplied finger assignments during supervised off-body calibration. The status check confirms IDs 1–6 respond, but cannot independently identify which finger each servo moves.
 2. Measure each servo's open, closed, and hard limits unloaded; verify direction and speed per channel. Store those values in Calibration, then test the E-stop.
 3. Build a deliberate physical-arm flow that checks the gate before every pose or sequence step and requires a fresh confirmation for each action.
 4. Connect the glasses camera or object detector. Send real events to `POST /api/vision/detection` with `source: "external"`; add a reviewable object-to-macro mapping and user confirmation before allowing any resulting motion.

@@ -153,7 +153,7 @@ Tailwind utility breakpoints used inside JSX (`xl:`) follow Tailwind defaults (1
 
 - `.field`: white, 1 px `#e1e7e0`, radius 9 px, padding 9/11; focus border `#789d7d` with a 3 px `#e7f0e4` ring.
 - Labels are bold small text above the field; numeric fields clamp via `min`/`max` attributes (calibration counts 0–4095, speed 1–100, duration 100–10000).
-- Range inputs are plain `<input type="range">` with the coral `accent-color`; Manual Control labels each slider with the channel name in `aria-label` (`"Index finger curl"`) and shows value percentages.
+- Range inputs are plain `<input type="range">` with the coral `accent-color`; Manual Control labels each slider with its current channel name in `aria-label` and shows value percentages.
 - Selects use the same `.field` class.
 
 ### 3.3 Cards and panels
@@ -218,7 +218,7 @@ Both panels end with a `.panel-note` honesty strip; the first one states that no
 ### 4.6 Devices
 
 - List of cards (two columns, ≤700 px one column): icon tile (`#edf6ef` bg, teal icon), device name, one-line detail, and a status pill. The servo controller pill uses the read-only `/api/hardware/status` result; it is green only when all six expected IDs respond with complete readings.
-- The Devices page shows live raw positions, voltage, and temperature for IDs 1–6, with a refresh button. Finger labels are planned assignments, not verified wiring. The smart glasses still report `Not connected`; the browser camera is intentionally not listed here.
+- The Devices page shows live raw positions, voltage, and temperature for IDs 1–6, with a refresh button. Finger labels follow the builder-supplied assignment: pinky, ring, middle, index, thumb flexion (up/down), thumb side-to-side. Safe motion limits still need measurement. The smart glasses still report `Not connected`; the browser camera is intentionally not listed here.
 
 ---
 

@@ -9,6 +9,8 @@ These are the two Python scripts Yusuf sent by message, saved under descriptive 
 
 Both scripts require the `feetech_tuna` Python module and a serial port argument. A copy of that library is now included under `backend/feetech_tuna`. The scripts currently target IDs 1–8, while the glove design uses IDs 1–6. They accept raw 0–4095 positions without the glove's measured mechanical limits. Do not use their movement commands on a worn or tensioned glove.
 
+The builder identified the glove's physical IDs as 1=pinky, 2=ring, 3=middle, 4=index, 5=thumb flexion, and 6=thumb side-to-side opposition. This differs from the app's first-release mapping and from the scripts' eight-servo assumption.
+
 The app's **Devices** page now offers a read-only status check for IDs 1–6. If you need to run the original terminal script, stop the HandOff API first so both programs do not open the same serial port. From the project root, use:
 
 ```bash

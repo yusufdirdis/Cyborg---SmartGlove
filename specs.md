@@ -16,7 +16,7 @@ Sources reviewed:
 | `README.md` | Project intent, safety boundary, integration next steps |
 | `backend/app/main.py` | API behavior, Pydantic models, SQLite schema, simulation adapter |
 | `backend/app/hardware_boundary.py` | `ServoTransport` protocol, `gated_counts()` gate |
-| `backend/tests/test_api.py` | Existing test coverage (five tests) |
+| `backend/tests/test_api.py` | Existing test coverage (nine tests) |
 | `backend/requirements.txt` | Backend dependency contract |
 | `frontend/src/main.tsx` | UI behavior and wording |
 | `frontend/src/index.css` | Frontend visual foundations |
@@ -40,7 +40,7 @@ The project has two distinct halves, and they must not be conflated:
 1. **A physical glove prototype (team-reported, separately built).** The team reports that finger movement works and that wrist hardware is still in development. Two controller test scripts are saved in `hardware/reference`; the Feetech-tuna library is included under `backend/feetech_tuna`. Finger assignments, wiring, and physical limits still need confirmation.
 2. **This repository — a simulation-first control studio [Implemented].** It models six finger channels, stores macros and calibration, broadcasts simulated telemetry, and defines a safety gate for a future movement driver. It now has a **read-only** serial status route for IDs 1–6. There is **no route that can switch movement to hardware mode**.
 
-The next physical milestone is **confirming the ID-to-finger mapping and measuring safe limits off-body**, then integrating guarded movement through the safety boundary (§5).
+The glove builder supplied the ID-to-finger mapping below. The next physical milestone is **checking it during supervised off-body calibration and measuring safe limits**, then integrating guarded movement through the safety boundary (§5).
 
 Stack:
 
@@ -98,14 +98,14 @@ Defined in `SERVO_NAMES` in `backend/app/main.py:18` and mirrored by the fronten
 
 | Channel | Movement |
 |---|---|
-| 1 | Index finger |
-| 2 | Middle finger |
-| 3 | Thumb flexion |
-| 4 | Thumb opposition |
-| 5 | Ring finger |
-| 6 | Pinky finger |
+| 1 | Pinky finger |
+| 2 | Ring finger |
+| 3 | Middle finger |
+| 4 | Index finger |
+| 5 | Thumb flexion (up/down) |
+| 6 | Thumb opposition (side to side) |
 
-**Prerequisite [Required before physical testing]:** confirm the physical servo IDs and tendon assignments against this mapping. The README notes that an older attached hardware PDF contained different wrist assignments and varying suggested counts; this repository intentionally follows the newer six-finger layout. Software IDs are not evidence of wiring.
+The builder supplied this mapping after the read-only scan found IDs 1–6. It supersedes the older document's ID order. **Prerequisite [Required before physical movement]:** verify the physical tendon assignment off-body and measure safe limits. Serial discovery confirms IDs, not which finger each motor pulls.
 
 ### 2.2 Pose contract [Implemented]
 
@@ -127,7 +127,7 @@ Calibration count bounds:
 - The model permits raw counts from **0 to 4095** (`CalibrationInput` field constraints). These are **model bounds, not verified operating limits**.
 - `open_count` and `closed_count` must each lie within `[min_count, max_count]`, `min_count < max_count`, and `|closed_count − open_count| ≥ 10`.
 - `direction` must match the sign of `closed_count − open_count` (`increasing` or `decreasing`).
-- Thumb opposition (channel 4) has its own calibrated motion endpoints, like every other channel. It is not coupled to thumb flexion's endpoints.
+- Thumb opposition (channel 6) has its own calibrated motion endpoints, like every other channel. It is not coupled to thumb flexion's endpoints.
 
 ### 2.4 Wrist exclusion rule [Required]
 
@@ -174,10 +174,10 @@ Seeded sample poses (when `macros` is empty), each `kind = "pose"` with one 700 
 | Name | Description | Positions |
 |---|---|---|
 | Open hand | All fingers relaxed | `[0, 0, 0, 0, 0, 0]` |
-| Gentle fist | A light, even curl | `[75, 75, 75, 65, 75, 75]` |
-| Point | Index extended, other fingers curled | `[0, 80, 75, 55, 80, 80]` |
-| Pinch | Thumb meets index | `[45, 0, 55, 75, 0, 0]` |
-| Peace sign | Index and middle extended | `[0, 0, 70, 50, 80, 80]` |
+| Gentle fist | A light, even curl | `[75, 75, 75, 75, 75, 65]` |
+| Point | Index extended, other fingers curled | `[80, 80, 80, 0, 75, 55]` |
+| Pinch | Thumb meets index | `[0, 0, 0, 45, 55, 75]` |
+| Peace sign | Index and middle extended | `[80, 80, 0, 0, 70, 50]` |
 
 Seeded calibration for every channel: `open_count = 2048`, `closed_count = 2448`, `min_count = 1800`, `max_count = 2600`, `direction = "increasing"`, `speed = 30`, `verified = false`. These are **placeholder values for interface testing only**.
 
@@ -206,27 +206,27 @@ Import/export behavior:
 
 | Behavior | Detail |
 |---|---|
-| Export | `GET /api/macros/export` returns `{"version": 1, "macros": [...]}` with only `name`, `description`, `kind`, `steps` — **no IDs, no timestamps**. |
+| Export | `GET /api/macros/export` returns `{"version": 2, "macros": [...]}` with only `name`, `description`, `kind`, `steps` — **no IDs, no timestamps**. Version 2 uses the builder-supplied ID order. |
 | Export cap | **None currently.** An export can contain more than 100 records. |
-| Import | `POST /api/macros/import` accepts `version: 1` and **at most 100** macros; a larger list fails with 422. |
+| Import | `POST /api/macros/import` accepts version 1 or 2 and **at most 100** macros; version 1 positions are remapped by finger, and a larger list fails with 422. |
 | Empty import | Currently allowed; returns `{"imported": 0}`. |
 | Import semantics | Always **creates copies with new UUIDs**; it never overwrites an existing macro by ID. |
 | Round-trip asymmetry | Export has no 100-record cap while import does; a database with >100 macros produces an export that cannot be re-imported in one file. The roadmap fixes this asymmetry (§7, Phase 2). |
 
-### 3.3 Version-1 file contract (JSON Schema)
+### 3.3 Version-2 file contract (JSON Schema)
 
 This schema describes the **normalized export/import file**, which is stricter than what Pydantic accepts (see §3.2). JSON object keys must be strings, so channel keys are `"1"`–`"6"`.
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "handoff-macros.v1.json",
-  "title": "handoff macro export, version 1",
+  "$id": "handoff-macros.v2.json",
+  "title": "handoff macro export, version 2",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "macros"],
   "properties": {
-    "version": { "const": 1 },
+    "version": { "const": 2 },
     "macros": {
       "type": "array",
       "maxItems": 100,
@@ -439,12 +439,12 @@ Returns the live simulation snapshot (identical shape to the WebSocket message, 
 
 ```json
 [
-  { "id": 1, "name": "Index finger" },
-  { "id": 2, "name": "Middle finger" },
-  { "id": 3, "name": "Thumb flexion" },
-  { "id": 4, "name": "Thumb opposition" },
-  { "id": 5, "name": "Ring finger" },
-  { "id": 6, "name": "Pinky finger" }
+  { "id": 1, "name": "Pinky finger" },
+  { "id": 2, "name": "Ring finger" },
+  { "id": 3, "name": "Middle finger" },
+  { "id": 4, "name": "Index finger" },
+  { "id": 5, "name": "Thumb flexion (up/down)" },
+  { "id": 6, "name": "Thumb side-to-side" }
 ]
 ```
 
@@ -527,7 +527,7 @@ Clears the software stop (`stopped: false`, `last_event` = `"Software stop reset
 Array merging stored JSON with the channel name:
 
 ```json
-{ "servo_id": 1, "name": "Index finger", "open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": false }
+{ "servo_id": 1, "name": "Pinky finger", "open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": false }
 ```
 
 #### `PUT /api/calibration/{servo_id}` → 200
@@ -778,19 +778,23 @@ Six-channel simulation with interpolation; macro CRUD with export/import; SQLite
 
 ## 8. Testing
 
-### 8.1 Existing coverage (five tests)
+### 8.1 Existing coverage (nine tests)
 
-`backend/tests/test_api.py` contains five tests; coverage as inspected:
+`backend/tests/test_api.py` contains nine tests; coverage as inspected:
 
 | Test | What it asserts |
 |---|---|
-| `test_macro_round_trip_and_import_export` | Create → 201 with ID; PUT renames; export has `version: 1`; import returns `{"imported": 1}`; delete → 204 |
+| `test_macro_round_trip_and_import_export` | Create → 201 with ID; PUT renames; export has `version: 2`; import returns `{"imported": 1}`; delete → 204 |
+| `test_user_servo_ids_and_legacy_import_keep_finger_meaning` | Confirms the builder-supplied labels and remaps version 1 imports by finger |
+| `test_existing_macros_are_remapped_once_on_database_upgrade` | Confirms stored gestures migrate once using SQLite `user_version` |
+| `test_fresh_sample_gestures_use_correct_finger_ids` | Confirms Point and Pinch seed with the corrected finger IDs |
 | `test_stop_latches_and_reset_allows_simulation` | Stop latches; pose while latched → 409; reset unlatches; pose accepted with `mode: "simulation"` |
 | `test_calibration_gate_and_vision_never_moves` | Invalid calibration → 422; valid → 200; a vision detection returns `action: "none"` and leaves positions unchanged |
 | `test_telemetry_connects` | WebSocket initial snapshot has `mode: "simulation"` and six channels |
 | `test_future_hardware_gate_requires_every_condition` | `gated_counts` raises without E-stop confirmation, while stopped, and with an unverified channel; returns `(500, 20)` when all conditions hold |
+| `test_read_only_hardware_status_uses_six_ids_and_never_writes` | Six IDs are pinged, status is read, the port closes, and no write API is used |
 
-The README records that this suite passed at build time. **This documentation pass did not execute the tests**; no fresh pass is claimed. There is no frontend test suite and no linter.
+The nine backend tests and frontend build passed after the mapping update. There is no frontend test suite and no linter.
 
 ### 8.2 Future tests [Proposed]
 

@@ -15,8 +15,18 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
-SERVO_NAMES = {1: "Index finger", 2: "Middle finger", 3: "Thumb flexion", 4: "Thumb opposition", 5: "Ring finger", 6: "Pinky finger"}
+SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
+# The first release used index, middle, thumb flexion, thumb opposition, ring,
+# pinky for IDs 1–6. Preserve each finger's pose when upgrading saved macros.
+LEGACY_TO_CURRENT_ID = {1: 4, 2: 3, 3: 5, 4: 6, 5: 2, 6: 1}
 DB_PATH = Path(os.environ.get("HANDOS_DB", Path(__file__).resolve().parents[1] / "handos.sqlite3"))
+
+
+def remap_legacy_positions(positions: dict) -> dict[int, int]:
+    return {
+        current_id: positions[old_id] if old_id in positions else positions[str(old_id)]
+        for old_id, current_id in LEGACY_TO_CURRENT_ID.items()
+    }
 
 
 class Pose(BaseModel):
@@ -73,7 +83,7 @@ class CalibrationInput(BaseModel):
 
 
 class ImportPayload(BaseModel):
-    version: Literal[1]
+    version: Literal[1, 2]
     macros: list[MacroInput] = Field(max_length=100)
 
 
@@ -88,13 +98,20 @@ def init_db():
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS calibration (servo_id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            for row in list(conn.execute("SELECT id, steps FROM macros")):
+                steps = json.loads(row["steps"])
+                for step in steps:
+                    step["positions"] = remap_legacy_positions(step["positions"])
+                conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(steps), row["id"]))
+            conn.execute("PRAGMA user_version = 1")
         if conn.execute("SELECT COUNT(*) FROM macros").fetchone()[0] == 0:
             samples = [
                 ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
-                ("Gentle fist", "A light, even curl", [75, 75, 75, 65, 75, 75]),
-                ("Point", "Index extended, other fingers curled", [0, 80, 75, 55, 80, 80]),
-                ("Pinch", "Thumb meets index", [45, 0, 55, 75, 0, 0]),
-                ("Peace sign", "Index and middle extended", [0, 0, 70, 50, 80, 80]),
+                ("Gentle fist", "A light, even curl", [75, 75, 75, 75, 75, 65]),
+                ("Point", "Index extended, other fingers curled", [80, 80, 80, 0, 75, 55]),
+                ("Pinch", "Thumb meets index", [0, 0, 0, 45, 55, 75]),
+                ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
             ]
             for name, description, values in samples:
                 save_macro(conn, MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, values)), duration_ms=700)]))
@@ -243,14 +260,18 @@ def delete_macro(macro_id: str):
 
 @app.get("/api/macros/export")
 def export_macros():
-    return {"version": 1, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
+    return {"version": 2, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
 
 
 @app.post("/api/macros/import")
 def import_macros(payload: ImportPayload):
     with db() as conn:
         for macro in payload.macros:
-            save_macro(conn, macro)
+            data = macro.model_dump()
+            if payload.version == 1:
+                for step in data["steps"]:
+                    step["positions"] = remap_legacy_positions(step["positions"])
+            save_macro(conn, MacroInput.model_validate(data))
     return {"imported": len(payload.macros)}
 
 
