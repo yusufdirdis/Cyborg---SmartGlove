@@ -1,8 +1,4 @@
-"""Contract for future physical movement. Not connected to API control routes.
-
-The read-only status route is separate. Before adding any motor writes, a
-physical transport must call this gate for every pose or sequence step.
-"""
+"""Gates for future poses and for the narrow one-servo bench control path."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,3 +40,21 @@ def gated_counts(percentages: dict[int, int], calibration: dict[int, Calibration
             raise PermissionError(f"Servo {sid} target exceeds measured limits")
         result[sid] = (count, c.speed)
     return result
+
+
+def gated_jog_count(start: int, target: int, calibration: CalibrationInput,
+                    approval: ActuationApproval, stopped: bool) -> int:
+    """Allow only one measured, confirmed 10-count step from the present count."""
+    if stopped:
+        raise PermissionError("Software stop is latched")
+    if not approval.approved or not approval.physical_estop_tested_this_session:
+        raise PermissionError("Fresh confirmation and a tested physical power cutoff are required")
+    if not calibration.verified:
+        raise PermissionError("Servo limits are not verified")
+    if (calibration.open_count, calibration.closed_count, calibration.min_count, calibration.max_count) == (2048, 2448, 1800, 2600):
+        raise PermissionError("Starter calibration values are placeholders")
+    if abs(target - start) != 10:
+        raise PermissionError("Only a single 10-count step is allowed")
+    if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):
+        raise PermissionError("Current position or target is outside measured limits")
+    return target

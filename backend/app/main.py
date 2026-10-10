@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
@@ -229,6 +229,79 @@ def hardware_status():
     return scan_servos()
 
 
+class JogPreviewInput(BaseModel):
+    servo_id: int = Field(ge=1, le=6)
+    delta: Literal[-10, 10]
+
+
+class JogConfirmInput(BaseModel):
+    token: str
+    phrase: str
+    off_body: bool
+    power_cut_tested: bool
+    cord_path_clear: bool
+
+
+def _local_hardware_request(request: Request) -> None:
+    client_host = request.client.host if request.client else ""
+    origin = request.headers.get("origin")
+    if client_host not in ("127.0.0.1", "::1", "testclient") or (
+        origin and origin not in ("http://127.0.0.1:5173", "http://localhost:5173")
+    ):
+        raise HTTPException(403, "Physical controls are available only from the local website.")
+
+
+@app.get("/api/hardware/control")
+def hardware_control_status():
+    from .hardware_control import writes_enabled
+
+    return {"writes_enabled": writes_enabled(), "step_counts": 10}
+
+
+@app.post("/api/hardware/jog/preview")
+def preview_hardware_jog(payload: JogPreviewInput, request: Request):
+    from .hardware_control import HardwareControlError, prepare_jog
+
+    _local_hardware_request(request)
+    with db() as conn:
+        row = conn.execute("SELECT data FROM calibration WHERE servo_id=?", (payload.servo_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Servo calibration not found")
+    calibration = CalibrationInput.model_validate_json(row["data"])
+    try:
+        return prepare_jog(payload.servo_id, payload.delta, calibration, sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/jog/execute")
+def execute_hardware_jog(payload: JogConfirmInput, request: Request):
+    from .hardware_control import HardwareControlError, execute_jog
+
+    _local_hardware_request(request)
+    # The token binds the servo and target; reload its calibration so a changed
+    # record cannot be accepted between preview and execution.
+    from .hardware_control import pending_servo_id
+
+    servo_id = pending_servo_id(payload.token)
+    if servo_id is None:
+        raise HTTPException(409, "Move preview expired. Check the move again.")
+    with db() as conn:
+        row = conn.execute("SELECT data FROM calibration WHERE servo_id=?", (servo_id,)).fetchone()
+    if row is None:
+        raise HTTPException(409, "Servo calibration is unavailable.")
+    calibration = CalibrationInput.model_validate_json(row["data"])
+    try:
+        return execute_jog(payload.token, payload.phrase,
+                           off_body=payload.off_body,
+                           power_cut_tested=payload.power_cut_tested,
+                           cord_path_clear=payload.cord_path_clear,
+                           calibration=calibration, stopped=sim.stopped,
+                           is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @app.get("/api/macros")
 def macros():
     with db() as conn:
@@ -301,9 +374,14 @@ async def control_pose(pose: Pose):
 
 
 @app.post("/api/control/stop")
-async def stop():
+async def stop(request: Request):
+    from .hardware_control import disable_torque, writes_enabled
+
+    if writes_enabled():
+        _local_hardware_request(request)
     await sim.stop()
-    return sim.snapshot()
+    hardware_stop = await asyncio.to_thread(disable_torque)
+    return {**sim.snapshot(), "hardware_stop": hardware_stop}
 
 
 @app.post("/api/control/reset")

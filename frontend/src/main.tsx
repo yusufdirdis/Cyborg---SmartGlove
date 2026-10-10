@@ -9,6 +9,7 @@ type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',st
 type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean}
 type Status = {mode:string,positions:Record<number,number>,target:Record<number,number>,stopped:boolean,playing:boolean,last_event:string,vision:{label:string,confidence:number,source:string}|null,devices:Record<string,string>}
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
+type JogPreview = {servo_id:number,start:number,target:number,delta:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
 const servoMounts = [
  {id:4,location:'Top left'}, {id:3,location:'Top right'},
@@ -28,7 +29,7 @@ function App(){
  useEffect(()=>{scanHardware();const timer=window.setInterval(scanHardware,20000);return()=>clearInterval(timer)},[])
  const action=async<T,>(work:()=>Promise<T>,success?:string)=>{try{setError('');const result=await work();if(success)setNotice(success);return result}catch(e){setError(e instanceof Error?e.message:String(e));return undefined}}
  const play=async(m:Macro)=>{await action(()=>api(`/macros/${m.id}/play`,{method:'POST'}),`Playing ${m.name} in simulation`)}
- const stop=()=>action(()=>api<Status>('/control/stop',{method:'POST'}),'Software stop latched')
+ const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:{attempted:boolean,failed_ids?:number[],message:string}}>('/control/stop',{method:'POST'}));if(result)setNotice(`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`)}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
  const applyManual=()=>action(()=>api('/control/pose',{method:'POST',body:json({positions:manual})}),'Pose sent to simulation')
  const nav:[Page,React.ElementType][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Calibration',Settings2],['Devices',Cpu]]
@@ -38,26 +39,26 @@ function App(){
    <div className="sidebar-top"><button className="sidebar-brand" onClick={()=>navigate('Dashboard')} aria-label="handoff home"><span className="sidebar-brand-icon"><Hand size={25} strokeWidth={2}/></span><span>handoff<span className="brand-dot">.</span></span></button><button className="sidebar-close" onClick={()=>setMenuOpen(false)} aria-label="Close menu"><X size={20}/></button></div>
    <div className="sidebar-section-label">YOUR WORKSPACE</div>
    <nav className="sidebar-nav" aria-label="Main navigation">{nav.map(([name,Icon])=><button key={name} className={page===name?'active':''} onClick={()=>navigate(name)}><Icon size={18} strokeWidth={1.9}/><span>{name==='Dashboard'?'Overview':name}</span>{name==='Macro Studio'&&<small>{macros.length}</small>}</button>)}</nav>
-   <div className="sidebar-bottom"><div className="sidebar-section-label">SYSTEM</div><div className="sidebar-status"><span className={`status-dot ${connected?'online':''}`}/><div><b>{connected?'Local API connected':'API offline'}</b><small>Simulation controls · no motor commands</small></div></div></div>
+   <div className="sidebar-bottom"><div className="sidebar-section-label">SYSTEM</div><div className="sidebar-status"><span className={`status-dot ${connected?'online':''}`}/><div><b>{connected?'Local API connected':'API offline'}</b><small>Manual controls and macros: simulation</small></div></div></div>
   </aside>
   {menuOpen&&<button className="sidebar-overlay" aria-label="Close menu" onClick={()=>setMenuOpen(false)}/>}
   <div className="app-main"><header className="app-header"><div className="header-title"><button className="mobile-menu" onClick={()=>setMenuOpen(true)} aria-label="Open menu"><Menu size={21}/></button><div><strong>{page==='Dashboard'?'handoff':page}</strong><span>{page==='Dashboard'?'Overview dashboard':subtitles[page]}</span></div></div><div className="header-meta"><span className="header-connection"><i className={connected?'on':''}/>{connected?'API connected':'API offline'}</span><span className="header-mode">SIMULATION</span></div></header>
    <main className="app-content">
     {error&&<div role="alert" className="message message-error"><span>{error}</span><button onClick={()=>setError('')} aria-label="Dismiss error"><X size={16}/></button></div>}
     {notice&&<div role="status" className="message message-success"><span>{notice}</span><button onClick={()=>setNotice('')} aria-label="Dismiss notice"><X size={16}/></button></div>}
-    {page!=='Dashboard'&&<div className="page-heading"><div><div className="section-kicker">WORKSPACE / {page.toUpperCase()}</div><h1>{page}</h1><p>{subtitles[page]}</p></div><div className="page-actions"><button className="stop-button" onClick={stop}><Square size={13} fill="currentColor"/> Stop simulation</button>{status.stopped&&<button className="btn btn-secondary flex items-center gap-2" onClick={reset}><RotateCcw size={16}/> Reset simulation</button>}</div></div>}
-    {status.stopped&&<div className="stop-message"><Pause size={20}/><div><b>Software stop is latched.</b> All simulated motion is halted. Reset it when you are ready to continue.</div>{page==='Dashboard'&&<button className="btn btn-secondary" onClick={reset}>Reset simulation</button>}</div>}
+    {page!=='Dashboard'&&<div className="page-heading"><div><div className="section-kicker">WORKSPACE / {page.toUpperCase()}</div><h1>{page}</h1><p>{subtitles[page]}</p></div><div className="page-actions"><button className="stop-button" onClick={stop}><Square size={13} fill="currentColor"/> Stop</button>{status.stopped&&<button className="btn btn-secondary flex items-center gap-2" onClick={reset}><RotateCcw size={16}/> Reset simulation</button>}</div></div>}
+    {status.stopped&&<div className="stop-message"><Pause size={20}/><div><b>Software stop is latched.</b> Simulation is halted. If hardware control was enabled, servo torque-off was attempted; use the physical power cutoff if the glove moves.</div>{page==='Dashboard'&&<button className="btn btn-secondary" onClick={reset}>Reset simulation</button>}</div>}
     {page==='Dashboard'&&<Dashboard status={status} hardware={hardware} macros={macros} play={play} go={navigate} stop={stop}/>}
     {page==='Manual Control'&&<Manual status={status} manual={manual} setManual={setManual} apply={applyManual} go={navigate}/>}
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={manual}/>}
     {page==='AI Vision'&&<Vision/>}
     {page==='Calibration'&&<CalibrationPage cal={cal} hardware={hardware} onReading={setHardware} refresh={refresh} action={action}/>}
-    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware}/>}
+    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware} action={action} go={navigate}/>}
    </main>
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Shape each finger and preview the motion in simulation.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record measured limits before any future hardware connection.',Devices:'See what is connected and prepare for hardware integration.'}
+const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Shape each finger and preview the motion in simulation.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record measured limits before any future hardware connection.',Devices:'See live servo status and check small movement commands.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 function HandGraphic(){
@@ -69,10 +70,10 @@ function HandGraphic(){
 function Dashboard({status,hardware,macros,play,go,stop}:{status:Status,hardware:HardwareStatus|null,macros:Macro[],play:(m:Macro)=>void,go:(p:Page)=>void,stop:()=>void}){
  const hardwareConnected=hardware?.connected===true
  return <div className="overview-stack">
- <section className="overview-panel control-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={22}/></span><div className="panel-head-copy"><h1>Control your hand</h1><p>Preview your glove's movements.</p></div><button className="stop-button panel-stop" onClick={stop}><Square size={12} fill="currentColor"/> Stop simulation</button></div>
+ <section className="overview-panel control-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={22}/></span><div className="panel-head-copy"><h1>Control your hand</h1><p>Preview your glove's movements.</p></div><button className="stop-button panel-stop" onClick={stop}><Square size={12} fill="currentColor"/> Stop</button></div>
   <div className="hardware-connection" role="status" aria-label={hardwareConnected?'Hardware connected':'Hardware disconnected'}><span className={`hardware-indicator ${hardwareConnected?'on':''}`} aria-hidden="true"/>Hardware connected</div>
   <div className="control-workspace"><div className="hand-stage"><div className="stage-head"><b>YOUR GLOVE</b><span>{status.playing?'MOVING':'READY'}</span></div><HandGraphic/><div className="stage-foot">Channel values shown in the simulation panel</div></div><div className="control-details"><div className="detail-heading"><div><span className="section-kicker">MOVEMENT</span><h2>Finger movement</h2></div><span className="detail-status"><i/> Simulation only</span></div><div className="channel-list">{servos.map((name,i)=><div className="channel-row" key={name}><span className="channel-index">{String(i+1).padStart(2,'0')}</span><span className="channel-name">{name}</span><span className="channel-meter"><i style={{width:`${status.positions[i+1]}%`}}/></span><b>{status.positions[i+1]}%</b></div>)}</div><button className="dark-action" onClick={()=>go('Manual Control')}>Open manual controls <span aria-hidden="true">↗</span></button></div></div>
-  <div className="panel-note"><span className="status-dot online"/><b>Simulation active</b><span>{hardwareConnected?'Six servos responding. No motor commands are sent.':'No motor commands are sent.'}</span></div>
+  <div className="panel-note"><span className="status-dot online"/><b>Simulation active</b><span>{hardwareConnected?'Six servos responding. Manual controls and macros stay in simulation.':'Manual controls and macros stay in simulation.'}</span></div>
  </section>
  <section className="overview-panel gestures-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={21}/></span><div className="panel-head-copy"><div className="section-kicker">SAVED MOVEMENTS</div><h2>Gestures, ready to test.</h2><p>Choose a macro to preview it in the simulated hand.</p></div><button className="plain-link" onClick={()=>go('Macro Studio')}>Open Macro Studio <span aria-hidden="true">↗</span></button></div><div className="overview-gesture-grid">{macros.slice(0,4).map((m,i)=><button key={m.id} disabled={status.stopped} onClick={()=>play(m)} className="overview-gesture"><span className="gesture-index">{String(i+1).padStart(2,'0')}</span><span><b>{m.name}</b><small>{m.description||'Custom gesture'}</small></span><Play size={15} fill="currentColor"/></button>)}</div><div className="panel-note"><span className="status-dot"/><span>{macros.length} saved macros</span></div></section>
  </div>}
@@ -170,10 +171,31 @@ function CalibrationPage({cal,hardware,onReading,refresh,action}:{
   })}</div>
  </>
 }
-function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
+function Devices({status,hardware,scan,action,go}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>,go:(page:Page)=>void}){
+ const [servoId,setServoId]=useState(1)
+ const [delta,setDelta]=useState<10|-10>(10)
+ const [preview,setPreview]=useState<JogPreview|null>(null)
+ const [phrase,setPhrase]=useState('')
+ const [offBody,setOffBody]=useState(false)
+ const [powerCut,setPowerCut]=useState(false)
+ const [cordClear,setCordClear]=useState(false)
+ const [busy,setBusy]=useState(false)
+ const check=async()=>{
+  setBusy(true);setPreview(null);setPhrase('')
+  try{const result=await action(()=>api<JogPreview>('/hardware/jog/preview',{method:'POST',body:json({servo_id:servoId,delta})}));if(result)setPreview(result)}finally{setBusy(false)}
+ }
+ const send=async()=>{
+  if(!preview?.token)return
+  setBusy(true)
+  try{
+   const result=await action(()=>api<{accepted:boolean}>('/hardware/jog/execute',{method:'POST',body:json({token:preview.token,phrase,off_body:offBody,power_cut_tested:powerCut,cord_path_clear:cordClear})}),'One 10-count command sent. Refresh status before another move.')
+   setPreview(null);setPhrase('');setOffBody(false);setPowerCut(false);setCordClear(false)
+   if(result)await scan()
+  }finally{setBusy(false)}
+ }
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'
  const items=[
-  {name:'Servo controller',state:controllerState,detail:'Read-only connection check',Icon:Cpu},
+  {name:'Servo controller',state:controllerState,detail:'USB connection and live position',Icon:Cpu},
   {name:'Smart glasses',state:status.devices.glasses??'Not connected',detail:'Glasses camera connection',Icon:Camera},
  ]
  return <div className="space-y-5">
@@ -186,7 +208,27 @@ function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|n
     const servo=hardware?.servos.find(item=>item.id===id)
     return <div key={id} className="rounded-xl border border-[#e8ece8] px-4 py-3 flex justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.12em] font-bold text-[#839187]">{location}</div><b className="text-sm">ID {id}</b><span className="text-xs text-[#839187] ml-2">{servos[id-1]}</span></div><div className="text-right text-xs text-[#63796a]">{servo?<><b className="text-[#1e4937]">{servo.position??'—'} counts</b><div>{servo.voltage_v?.toFixed(1)??'—'} V · {servo.temperature_c??'—'}°C</div><div>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`} · {servo.torque_enabled==null?'Torque unknown':servo.torque_enabled?'Torque on':'Torque off'}</div></>:<span>No response</span>}</div></div>
    })}</div>
-   <p className="text-xs text-[#839187] mt-4">Status reads do not move the glove. Manual controls and macros still run in simulation.</p>
+   <p className="text-xs text-[#839187] mt-4">Status reads do not move the glove. Manual sliders and saved gestures still run in simulation.</p>
+  </div>
+  <div className="card p-5 max-w-[1040px]">
+   <Eyebrow>Direct servo control</Eyebrow><h2 className="text-xl font-bold mt-1">Small movement test</h2>
+   <p className="text-sm text-[#63796a] mt-2 leading-6">Check one 10-count step using the same Feetech controller code as the terminal test. The preview reads the motor and shows its target without moving it. Physical movement stays locked until this servo has measured limits and hardware control is enabled.</p>
+   <div className="grid sm:grid-cols-[1fr_1fr_auto] gap-3 mt-5 items-end">
+    <label className="text-xs font-bold text-[#6b7f72]">Servo<select className="field mt-1" value={servoId} onChange={e=>{setServoId(Number(e.target.value));setPreview(null)}}>{servoMounts.map(({id,location})=><option key={id} value={id}>ID {id} · {servos[id-1]} · {location}</option>)}</select></label>
+    <label className="text-xs font-bold text-[#6b7f72]">Direction<select className="field mt-1" value={delta} onChange={e=>{setDelta(Number(e.target.value) as 10|-10);setPreview(null)}}><option value={10}>+10 counts</option><option value={-10}>−10 counts</option></select></label>
+    <button className="btn btn-secondary" disabled={busy} onClick={check}>{busy?'Checking…':'Check move'}</button>
+   </div>
+   {preview&&<div className="rounded-xl border border-[#dce9df] bg-[#f8faf7] p-4 mt-4"><div className="text-sm font-bold">ID {preview.servo_id}: {preview.start} → {preview.target} counts</div><p className="text-xs text-[#63796a] mt-1">This is a {preview.delta>0?'+10':'−10'} count proposal. No command was sent.</p>
+    {preview.blocked_reason?<div className="text-sm text-[#976a20] mt-3">{preview.blocked_reason} <button className="font-bold underline" onClick={()=>go('Calibration')}>Open Calibration</button></div>:<div className="mt-4 space-y-3">
+     <p className="text-xs text-[#63796a]">This preview expires in 30 seconds. Keep the glove off your hand and use the independent power cutoff if movement is unexpected.</p>
+     <label className="block text-xs"><input type="checkbox" checked={offBody} onChange={e=>setOffBody(e.target.checked)} className="mr-2"/>The glove is off my hand.</label>
+     <label className="block text-xs"><input type="checkbox" checked={powerCut} onChange={e=>setPowerCut(e.target.checked)} className="mr-2"/>I tested the physical servo power cutoff for this session.</label>
+     <label className="block text-xs"><input type="checkbox" checked={cordClear} onChange={e=>setCordClear(e.target.checked)} className="mr-2"/>The cord path is clear and this step stays within measured travel.</label>
+     <label className="block text-xs font-bold text-[#6b7f72]">Type {preview.phrase} to confirm<input className="field mt-1" value={phrase} onChange={e=>setPhrase(e.target.value)} autoComplete="off"/></label>
+     <button className="btn btn-primary" disabled={busy||status.stopped||!offBody||!powerCut||!cordClear||phrase.trim()!==preview.phrase} onClick={send}>Send one small move</button>
+    </div>}
+   </div>}
+   <p className="text-xs text-[#839187] mt-4">The app never enables torque automatically or runs the terminal scripts’ multi-servo and return-home commands. Stop latches software control and attempts torque-off only when hardware writes are enabled; the physical power cutoff remains the reliable stop.</p>
   </div>
  </div>
 }

@@ -1,6 +1,6 @@
 # handoff — Phase 1
 
-A local, simulation-first control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, and a read-only servo status check.
+A local, simulation-first control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and a guarded one-servo movement test.
 
 ## Servo map
 
@@ -58,6 +58,16 @@ Connect the servo controller by USB and power its servo bus. The Dashboard hardw
 
 Calibration shows each servo's latest raw position. **Capture current position** makes a fresh read-only status check and copies that count into the chosen field in the unsaved form. It refuses a missing, invalid, or moving servo reading. Capture does not save the field or mark calibration verified. Only check verification after independently measuring the positions, direction, and mechanical limits off-body, then use **Save calibration**.
 
+### Website hardware controls
+
+**Devices → Small movement test** connects the terminal bench test's read-only preflight to the website. Select one servo and either +10 or −10 counts, then choose **Check move**. The website reads the actual servo and shows the current count and proposed target. This preview never sends a motor command. It checks the ST3215 model, position mode, torque state, stored target, voltage, temperature, moving state, and count margins through the supplied Feetech library.
+
+Physical writes are **off by default**. After the attached cords' direction and safe travel have been measured off-body for the selected servo, its non-placeholder limits are saved and verified in Calibration, and the physical power cutoff is tested for that session, the local API can be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1`. Only then can the preview offer a 30-second, one-use confirmation for one 10-count move. The confirmation checks that the glove is off-body, the cord path is clear, and the physical power cutoff was tested; the backend re-reads the servo and rejects changed position, calibration, or status before writing. It never enables torque automatically, returns home, runs a multi-servo command, or connects saved macros to real motors.
+
+When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Do not set this flag for the current unmeasured setup or for tests against connected hardware.
+
+The **Stop** control latches software control. When physical writes are enabled, it also attempts to switch off torque on all six servos. This is a best-effort software action; use the independent physical power cutoff if the glove moves unexpectedly. Resetting the software stop does not re-enable torque. The API and frontend must remain bound to localhost because this prototype has no user login.
+
 ### Bench preflight
 
 The separate `backend/app/bench_jog.py` terminal tool provides a read-only preflight for one servo at a time. Stop the API first so it releases the USB controller, then run from `backend`:
@@ -72,14 +82,14 @@ The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and commo
 
 ## Safety boundary
 
-The app has a read-only serial status route, but **no route that can switch movement to hardware mode**. `backend/app/hardware_boundary.py` defines the future movement interface and a gate that requires:
+Manual sliders, saved gestures, and vision events remain **simulation only**. The narrow website test is the only physical movement route, is locked by default, and uses `gated_jog_count()` before the one motor write. Future six-servo pose and sequence playback must use `gated_counts()` before every step. These gates require:
 
-- Valid, measured and verified calibration for every servo in the pose.
+- Valid, measured and verified calibration for the selected servo (or every servo in a future full pose).
 - A tested physical E-stop recorded for that session.
 - Explicit approval for that physical actuation.
 - No latched software stop; every mapped target inside measured limits.
 
-The physical E-stop must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop is useful for the app but cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their movement commands are not connected to `ServoTransport`; mechanical limits, torque behavior, and stop behavior need review before any physical control is added.
+The physical power cutoff must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their broad movement commands are not exposed by the website.
 
 ## Checks
 
@@ -88,13 +98,13 @@ cd backend && .venv/bin/python -m pytest -q
 cd ../frontend && npm run build
 ```
 
-The current build passes nine backend tests and the frontend build. The UI was also opened in a browser, where saving and playing a new pose updated the simulated hand. The frontend's current Tailwind 3 build dependencies have seven npm audit advisories (five high, two moderate), all in build tooling. Keep this development server bound to localhost and upgrade the build toolchain before any public deployment.
+The backend tests and frontend build pass. The website's live preflight showed Servo 1 at 1002 counts and proposed 1012 counts with `can_execute: false`, so no physical command was sent. The frontend's current Tailwind 3 build dependencies have seven npm audit advisories (five high, two moderate), all in build tooling. Keep this development server bound to localhost and upgrade the build toolchain before any public deployment.
 
 ## Integration next steps
 
 1. Verify the builder-supplied finger assignments during supervised off-body calibration. The status check confirms IDs 1–6 respond, but cannot independently identify which finger each servo moves.
-2. Measure each servo's open, closed, and hard limits unloaded; verify direction and speed per channel. Store those values in Calibration, then test the E-stop.
-3. Build a deliberate physical-arm flow that checks the gate before every pose or sequence step and requires a fresh confirmation for each action.
+2. With the glove off-body, establish each attached cord's direction and safe travel, then record measured limits in Calibration. Keep the independent servo power cutoff ready.
+3. After the single-servo test has been reviewed on the assembled glove, design a separate six-servo pose flow with per-step gates, stop monitoring, and fresh confirmation. The current website does not physically play macros.
 4. Connect the glasses camera or object detector. Send real events to `POST /api/vision/detection` with `source: "external"`; add a reviewable object-to-macro mapping and user confirmation before allowing any resulting motion.
 
 The API is intended for local development and has no user authentication. Do not expose it to an untrusted network.
