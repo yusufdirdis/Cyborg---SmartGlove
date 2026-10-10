@@ -23,6 +23,8 @@ class FakeDriver:
         self.porthandler = type("Port", (), {"is_open": False})()
         self.groupSyncWrite = self
         self.queued = []
+        self.torque = {servo_id: 1 for servo_id in range(1, 7)}
+        self.positions = {servo_id: 1000 for servo_id in range(1, 7)}
 
     def openSerialPort(self, port, baudrate, servoFamily):
         self.calls.append(("open", port))
@@ -39,10 +41,12 @@ class FakeDriver:
 
     def readReg(self, servo_id, address):
         self.calls.append(("read", servo_id, address))
-        return {56: 1000, 42: 1000, 62: 124, 63: 35, 66: 0, 33: 0, 40: 1}[address]
+        return {56: self.positions[servo_id], 42: self.positions[servo_id], 62: 124,
+                63: 35, 66: 0, 33: 0}.get(address, self.torque[servo_id] if address == 40 else None)
 
     def WritePosEx(self, servo_id, target, speed, acceleration):
         self.calls.append(("move", servo_id, target, speed, acceleration))
+        self.positions[servo_id] = target
         return 0, 0
 
     def clearParam(self):
@@ -55,10 +59,14 @@ class FakeDriver:
 
     def txPacket(self):
         self.calls.append(("sync_packet", tuple(self.queued)))
+        for servo_id, target, _speed, _acceleration in self.queued:
+            self.positions[servo_id] = target
         return 0
 
     def writeReg(self, servo_id, address, value):
         self.calls.append(("write", servo_id, address, value))
+        if address == 40:
+            self.torque[servo_id] = value
         return True
 
 
@@ -68,6 +76,7 @@ def fake_controller(monkeypatch):
     control.clear_pending()
     monkeypatch.setattr(control, "FeetechTuna", FakeDriver)
     monkeypatch.setattr(control, "_port", lambda: ("/dev/cu.fake", None))
+    monkeypatch.setattr(control, "LIVE_MOVE_INITIAL_WAIT_SECONDS", 0)
     yield FakeDriver.calls
     control.clear_pending()
 
@@ -306,34 +315,69 @@ def test_group_api_previews_then_sends_one_packet(fake_controller, monkeypatch, 
 
 def test_live_edits_share_one_packet_without_a_confirmation_token(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
-    calibrations = {1: measured_calibration(), 2: measured_calibration()}
-    result = control.move_live([(1, 1050, 2400), (2, 1060, 1200)], calibrations, False)
+    result = control.move_live([(1, 1050, 2400), (2, 1060, 1200)], False)
     assert result["accepted"] is True
     assert [call for call in fake_controller if call[0] == "sync_packet"] == [
         ("sync_packet", ((1, 1050, 2400, 50), (2, 1060, 1200, 50)))
     ]
 
 
-def test_live_edit_blocks_unmeasured_target_and_stop_before_packet(fake_controller, monkeypatch):
+def test_single_live_target_uses_goto_and_multiple_targets_use_sync(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
-    calibrations = {1: measured_calibration(), 2: measured_calibration()}
-    with pytest.raises(control.HardwareControlError, match="outside"):
-        control.move_live([(1, 1050, 2400), (2, 2000, 1200)], calibrations, False)
-    with pytest.raises(control.HardwareControlError, match="stop"):
-        control.move_live([(1, 1050, 2400)], calibrations, False, is_stopped=lambda: True)
+
+    single = control.move_live([(1, 1050, 900)], False)
+    assert single["accepted"] is True
+    assert ("move", 1, 1050, 900, 50) in fake_controller
     assert not any(call[0] == "sync_packet" for call in fake_controller)
+
+    control.move_live([(1, 1050, 900), (2, 1060, 1200)], False)
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", ((1, 1050, 900, 50), (2, 1060, 1200, 50)))
+    ]
+
+
+def test_live_edit_allows_raw_targets_without_calibration_but_obeys_stop(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    result = control.move_live([(1, 1050, 2400), (2, 2000, 1200)], False)
+    assert result["accepted"] is True
+    with pytest.raises(control.HardwareControlError, match="stop"):
+        control.move_live([(1, 1050, 2400)], False, is_stopped=lambda: True)
+    assert len([call for call in fake_controller if call[0] == "sync_packet"]) == 1
+
+
+def test_torque_enable_is_explicit_and_verified(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    result = control.enable_torque([4, 5, 6], False)
+    assert result["enabled_ids"] == [4, 5, 6]
+    assert [call for call in fake_controller if call[0] == "write"] == [
+        ("write", 4, 40, 1), ("write", 5, 40, 1), ("write", 6, 40, 1)
+    ]
 
 
 def test_live_api_sends_selected_targets_without_confirmation(fake_controller, monkeypatch, tmp_path):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
     monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "live.sqlite3")
     with TestClient(app) as client:
-        for servo_id in (1, 2):
-            assert client.put(f"/api/calibration/{servo_id}", json=measured_calibration().model_dump()).status_code == 200
-        payload = {"moves": [{"servo_id": 1, "target": 1050, "speed": 2400},
-                             {"servo_id": 2, "target": 1060, "speed": 1200}]}
+        # The All servos slider includes Servo 5 flexion and Servo 6 opposition.
+        payload = {"moves": [{"servo_id": servo_id, "target": 1050, "speed": 2400}
+                             for servo_id in (1, 2, 3, 4, 5, 6)]}
         response = client.post("/api/hardware/live", json=payload)
         assert response.status_code == 200 and response.json()["accepted"] is True
+        assert response.json()["final_positions"]["5"] == 1050
+        assert response.json()["final_positions"]["6"] == 1050
         foreign = client.post("/api/hardware/live", json=payload, headers={"Origin": "https://other.example"})
         assert foreign.status_code == 403
-    assert len([call for call in fake_controller if call[0] == "sync_packet"]) == 1
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", tuple((servo_id, 1050, 2400, 50) for servo_id in (1, 2, 3, 4, 5, 6)))
+    ]
+
+
+def test_torque_enable_api_is_local_and_explicit(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    with TestClient(app) as client:
+        response = client.post("/api/hardware/torque/enable", json={"servo_ids": [4, 5, 6]})
+        assert response.status_code == 200
+        assert response.json()["enabled_ids"] == [4, 5, 6]
+        foreign = client.post("/api/hardware/torque/enable", json={"servo_ids": [4]},
+                              headers={"Origin": "https://other.example"})
+        assert foreign.status_code == 403

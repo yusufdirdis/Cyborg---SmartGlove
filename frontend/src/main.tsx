@@ -1,13 +1,13 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {ArrowDownToLine, ArrowUpFromLine, Camera, Cpu, Hand, LayoutDashboard, Menu, Pause, Play, Plus, RotateCcw, Save, Settings2, SlidersHorizontal, Square, Trash2, X, type LucideIcon} from 'lucide-react'
+import {ArrowDownToLine, ArrowUpFromLine, Camera, Cpu, Hand, LayoutDashboard, Menu, Pause, Play, Plus, RotateCcw, Save, Settings2, ShieldCheck, SlidersHorizontal, Square, Trash2, X, type LucideIcon} from 'lucide-react'
 import {Canvas, useFrame, useThree} from '@react-three/fiber'
 import * as THREE from 'three'
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js'
 import {RoundedBoxGeometry} from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import './index.css'
 
-type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Devices'
+type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Calibration'|'Devices'
 type Step = {positions: Record<number,number>,duration_ms:number}
 type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[]}
 type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
@@ -16,6 +16,9 @@ type Status = {mode:string,positions:Record<number,number>,target:Record<number,
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
 type HardwareControlInfo = {writes_enabled:boolean,step_counts:number,position_speed_min:number,position_speed_max:number,position_speed_default:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
+// IDs 1–6 include both thumb flexion (5) and side-to-side opposition (6).
+const allServoIds = [1,2,3,4,5,6] as const
+const maxServoCount = 4000
 const servoMounts = [
  {id:4,location:'Top left'}, {id:3,location:'Top right'},
  {id:5,location:'Middle left'}, {id:2,location:'Middle right'},
@@ -36,16 +39,16 @@ function App(){
  useEffect(()=>{scanHardware();const timer=window.setInterval(scanHardware,20000);return()=>clearInterval(timer)},[])
  const action=async<T,>(work:()=>Promise<T>,success?:string)=>{try{setError('');const result=await work();if(success)setNotice(success);return result}catch(e){setError(e instanceof Error?e.message:String(e));return undefined}}
  const play=async(m:Macro)=>{await action(()=>api(`/macros/${m.id}/play`,{method:'POST'}),`Playing ${m.name} in simulation`)}
- const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:{attempted:boolean,failed_ids?:number[],message:string}}>('/control/stop',{method:'POST'}));if(result)setNotice(`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`)}
+ const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:{attempted:boolean,failed_ids?:number[],message:string}}>('/control/stop',{method:'POST'}));if(result){setNotice(`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`)}}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
- const nav:[Page,LucideIcon][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Devices',Cpu]]
+ const nav:[Page,LucideIcon][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Calibration',Settings2],['Devices',Cpu]]
  const navigate=(next:Page)=>{setPage(next);setMenuOpen(false);setNotice('');window.scrollTo({top:0,behavior:'smooth'})}
  return <div className="app-layout">
   <aside className={`app-sidebar ${menuOpen?'open':''}`}>
    <div className="sidebar-top"><button className="sidebar-brand" onClick={()=>navigate('Dashboard')} aria-label="handoff home"><span className="sidebar-brand-icon"><Hand size={25} strokeWidth={2}/></span><span>handoff<span className="brand-dot">.</span></span></button><button className="sidebar-close" onClick={()=>setMenuOpen(false)} aria-label="Close menu"><X size={20}/></button></div>
    <div className="sidebar-section-label">YOUR WORKSPACE</div>
    <nav className="sidebar-nav" aria-label="Main navigation">{nav.map(([name,Icon])=><button key={name} className={page===name?'active':''} onClick={()=>navigate(name)}><Icon size={18} strokeWidth={1.9}/><span>{name==='Dashboard'?'Overview':name}</span>{name==='Macro Studio'&&<small>{macros.length}</small>}</button>)}</nav>
-   <div className="sidebar-bottom"><div className="sidebar-section-label">SYSTEM</div><div className="sidebar-status"><span className={`status-dot ${connected?'online':''}`}/><div><b>{connected?'Local API connected':'API offline'}</b><small>Physical targets move on edit</small></div></div></div>
+   <div className="sidebar-bottom"><div className="sidebar-section-label">SYSTEM</div><div className="sidebar-status"><span className={`status-dot ${connected?'online':''}`}/><div><b>{connected?'Local API connected':'API offline'}</b><small>Targets require confirmation</small></div></div></div>
   </aside>
   {menuOpen&&<button className="sidebar-overlay" aria-label="Close menu" onClick={()=>setMenuOpen(false)}/>}
   <div className="app-main"><header className="app-header"><div className="header-title"><button className="mobile-menu" onClick={()=>setMenuOpen(true)} aria-label="Open menu"><Menu size={21}/></button><div><strong>{page==='Dashboard'?'handoff':page}</strong><span>{page==='Dashboard'?'Overview dashboard':subtitles[page]}</span></div></div><div className="header-meta"><span className="header-connection"><i className={connected?'on':''}/>{connected?'API connected':'API offline'}</span><span className="header-mode">LOCAL CONTROL</span></div></header>
@@ -55,16 +58,17 @@ function App(){
     {page!=='Dashboard'&&<div className="page-heading"><div><div className="section-kicker">WORKSPACE / {page.toUpperCase()}</div><h1>{page}</h1><p>{subtitles[page]}</p></div><div className="page-actions"><button className="stop-button" onClick={stop}><Square size={13} fill="currentColor"/> Stop</button>{status.stopped&&<button className="btn btn-secondary flex items-center gap-2" onClick={reset}><RotateCcw size={16}/> Reset software stop</button>}</div></div>}
     {status.stopped&&<div className="stop-message"><Pause size={20}/><div><b>Software stop is latched.</b> Simulation is halted. If hardware control was enabled, servo torque-off was attempted; use the physical power cutoff if the glove moves.</div>{page==='Dashboard'&&<button className="btn btn-secondary" onClick={reset}>Reset software stop</button>}</div>}
     {page==='Dashboard'&&<Dashboard status={status} hardware={hardware} cal={cal} macros={macros} play={play} go={navigate} stop={stop}/>}
-    {page==='Manual Control'&&<Manual status={status} hardware={hardware} cal={cal} onReading={setHardware}/>}
+    {page==='Manual Control'&&<Manual status={status} hardware={hardware} onReading={setHardware}/>}
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={status.positions}/>}
     {page==='AI Vision'&&<Vision/>}
+    {page==='Calibration'&&<CalibrationPage cal={cal} hardware={hardware} onReading={setHardware} refresh={refresh} action={action}/>}
 
     {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware}/>}
    </main>
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Adjust physical servo targets live.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Devices:'See connected devices and live servo status.'}
+const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record measured travel limits and gesture endpoints.',Devices:'See connected devices and live servo status.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 // 3D model of the real glove, seen from the back of a right hand (thumb on the left). The black cord guides,
@@ -227,7 +231,7 @@ function Hand3D({values,dim,viewKey}:{values:Record<number,number|null>,dim?:boo
  const targets=useRef<Record<number,number>>({}),curls=useRef<Record<number,number>>({})
  targets.current=Object.fromEntries(Object.entries(values).map(([id,value])=>[id,value??0]))
  const palm=useMemo(()=>new RoundedBoxGeometry(3.55,3.6,BACK_Z*2,4,.45),[]),cuff=useMemo(()=>new RoundedBoxGeometry(3.1,2.3,.98,4,.4),[])
- return <div className="hand-3d" role="img" aria-label="3D glove showing the current finger positions" style={{opacity:dim?.45:1}}>
+ return <div className="hand-3d" role="img" aria-label="Rotatable 3D glove model" style={{opacity:dim?.45:1}}>
   <Canvas camera={{position:[0,2.7,17.5],fov:32}} dpr={[1,2]}>
    <hemisphereLight args={['#ffffff','#c9d3cb',1.3]}/><directionalLight position={[4,6,8]} intensity={1.6}/><directionalLight position={[-5,2,-4]} intensity={.5}/>
    <Orbit resetKey={viewKey}/>
@@ -255,81 +259,133 @@ function Dashboard({status,hardware,cal,macros,play,go,stop}:{status:Status,hard
  <section className="overview-panel control-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={22}/></span><div className="panel-head-copy"><h1>Control your hand</h1><p>Preview your glove's movements.</p></div><button className="stop-button panel-stop" onClick={stop}><Square size={12} fill="currentColor"/> Stop</button></div>
   <div className="hardware-connection" role="status" aria-label={hardwareConnected?'Hardware connected':'Hardware disconnected'}><span className={`hardware-indicator ${hardwareConnected?'on':''}`} aria-hidden="true"/>Hardware connected</div>
   <div className="control-workspace"><div className="hand-stage"><div className="stage-head"><b>YOUR GLOVE</b><div className="hand-source" role="group" aria-label="Hand data source"><button className={physical?'':'on'} aria-pressed={!physical} onClick={()=>setSource('sim')}>Simulated</button><button className={physical?'on':''} aria-pressed={physical} onClick={()=>setSource('physical')}>Physical</button></div><span>{physical?(live?'LIVE':'OFFLINE'):status.playing?'MOVING':'READY'}</span></div><div className="hand-diagram hand-photo-stage"><Hand3D values={shown} dim={physical&&!live} viewKey={source}/>{physical&&!live&&<div className="hand-overlay">{status.physical?.error||'Servo controller not connected'}</div>}{unverified&&<span className="hand-badge">Calibration unverified</span>}<span className="diagram-label">3D · DRAG TO ROTATE</span></div><div className="stage-foot">{physical?"Live servo positions, mapped with each servo's saved open and closed counts":'Simulated positions from saved gestures'}</div></div><div className="control-details"><div className="detail-heading"><div><span className="section-kicker">MOVEMENT</span><h2>Finger movement</h2></div><span className="detail-status"><i/> {physical?(live?'Physical · live':'Physical · offline'):'Simulation'}</span></div><div className="channel-list">{servos.map((name,i)=>{const value=shown[i+1];return <div className="channel-row" key={name}><span className="channel-index">{String(i+1).padStart(2,'0')}</span><span className="channel-name">{name}</span><span className="channel-meter"><i style={{width:`${value??0}%`}}/></span><b>{value==null?'—':`${value}%`}</b></div>})}</div><button className="dark-action" onClick={()=>go('Manual Control')}>Open manual controls <span aria-hidden="true">↗</span></button></div></div>
-  <div className="panel-note"><span className="status-dot online"/><b>Simulation active</b><span>{hardwareConnected?'Six servos responding. Physical targets move when edited in Manual Control.':'Saved gestures use simulation; direct motor moves are in Manual Control.'}</span></div>
+  <div className="panel-note"><span className="status-dot online"/><b>Simulation active</b><span>{hardwareConnected?'Six servos responding. Stage targets and confirm them in Manual Control.':'Saved gestures use simulation; direct motor moves are in Manual Control.'}</span></div>
  </section>
  <section className="overview-panel gestures-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={21}/></span><div className="panel-head-copy"><div className="section-kicker">SAVED MOVEMENTS</div><h2>Gestures, ready to test.</h2><p>Choose a macro to preview it in the simulated hand.</p></div><button className="plain-link" onClick={()=>go('Macro Studio')}>Open Macro Studio <span aria-hidden="true">↗</span></button></div><div className="overview-gesture-grid">{macros.slice(0,4).map((m,i)=><button key={m.id} disabled={status.stopped} onClick={()=>play(m)} className="overview-gesture"><span className="gesture-index">{String(i+1).padStart(2,'0')}</span><span><b>{m.name}</b><small>{m.description||'Custom gesture'}</small></span><Play size={15} fill="currentColor"/></button>)}</div><div className="panel-note"><span className="status-dot"/><span>{macros.length} saved macros</span></div></section>
  </div>}
-function HardwareManual({status,hardware,cal,onReading}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void}){
+function HardwareManual({status,hardware,onReading}:{status:Status,hardware:HardwareStatus|null,onReading:(reading:HardwareStatus)=>void}){
  const [control,setControl]=useState<HardwareControlInfo|null>(null)
  const [targets,setTargets]=useState<Record<number,number>>({})
  const [speeds,setSpeeds]=useState<Record<number,number>>(()=>{try{return JSON.parse(localStorage.getItem('handoff-manual-speeds')||'{}')}catch{return {}}})
  const [localError,setLocalError]=useState('')
+ const [localNotice,setLocalNotice]=useState('')
+ const [torqueBusy,setTorqueBusy]=useState(false)
+ const [allServoTarget,setAllServoTarget]=useState(0)
  const [movingIds,setMovingIds]=useState<number[]>([])
- const pending=useRef<Record<number,number>>({})
- const timer=useRef<number|null>(null)
+ const [pending,setPending]=useState<Record<number,number>>({})
  const sending=useRef(false)
- const numberFocused=useRef(false)
- const latest=useRef({speeds,control,cal,status,hardware})
- latest.current={speeds,control,cal,status,hardware}
  useEffect(()=>{api<HardwareControlInfo>('/hardware/control').then(setControl).catch(e=>setLocalError(String(e)))},[])
  useEffect(()=>{localStorage.setItem('handoff-manual-speeds',JSON.stringify(speeds))},[speeds])
  useEffect(()=>{if(!hardware)return;setTargets(current=>{const next={...current};for(const servo of hardware.servos){if(servo.position!=null&&next[servo.id]===undefined)next[servo.id]=servo.position}return next})},[hardware])
- useEffect(()=>()=>{if(timer.current!==null)window.clearTimeout(timer.current)},[])
- useEffect(()=>{if(status.stopped){pending.current={};if(timer.current!==null)window.clearTimeout(timer.current);setMovingIds([])}},[status.stopped])
- const flush=async()=>{
-  timer.current=null
-  if(numberFocused.current)return
+ useEffect(()=>{if(status.stopped){setPending({});setMovingIds([]);setAllServoTarget(0);setTargets(Object.fromEntries((hardware?.servos??[]).filter(servo=>servo.position!=null).map(servo=>[servo.id,servo.position!])))}},[status.stopped])
+ const confirm=async()=>{
   if(sending.current)return
-  const ids=Object.keys(pending.current).map(Number).sort((a,b)=>a-b)
+  const ids=Object.keys(pending).map(Number).sort((a,b)=>a-b)
   if(!ids.length)return
-  const state=latest.current
-  if(!state.control?.writes_enabled||state.status.stopped||!state.hardware?.connected){pending.current={};setLocalError('Motor control is unavailable. No target was sent.');return}
-  const moves=ids.map(id=>({servo_id:id,target:pending.current[id],speed:state.speeds[id]??state.control!.position_speed_default}))
-  for(const move of moves){const c=state.cal.find(item=>item.servo_id===move.servo_id);if(!c?.jog_limits_verified||!Number.isInteger(move.target)||move.target<c.min_count||move.target>c.max_count){pending.current={};setLocalError(`Servo ${move.servo_id} target is outside its saved limits.`);return}}
-  pending.current={}
+  if(!control?.writes_enabled||status.stopped||!hardware?.connected){setLocalError('Motor control is unavailable. No target was sent.');return}
+  const moves=ids.map(id=>({servo_id:id,target:pending[id],speed:speeds[id]??control.position_speed_default}))
+  for(const move of moves){
+   if(!Number.isInteger(move.target)||move.target<0||move.target>maxServoCount){
+    setLocalError(`Servo ${move.servo_id} target must be a whole number from 0 to ${maxServoCount}. No target was sent.`)
+    return
+   }
+   const liveServo=hardware.servos.find(item=>item.id===move.servo_id)
+   if(liveServo?.torque_enabled!==true||liveServo.mode!==0){
+    setLocalError(`Servo ${move.servo_id} torque is off or it is not in position mode. No target was sent.`)
+    return
+   }
+  }
   sending.current=true
   setMovingIds(ids)
   setLocalError('')
+  setLocalNotice('')
   try{
-   await api('/hardware/live',{method:'POST',body:json({moves})})
+   const result=await api<{final_positions:Record<number,number>}>('/hardware/live',{method:'POST',body:json({moves})})
+   setPending({})
+   setAllServoTarget(0)
+   setLocalNotice(`Movement settled: ${moves.map(move=>`Servo ${move.servo_id} ${move.servo_id===5?'(thumb flexion) ':''}→ ${result.final_positions[move.servo_id]}`).join(' · ')}.`)
    const reading=await api<HardwareStatus>('/hardware/status')
    onReading(reading)
-  }catch(e){setLocalError(e instanceof Error?e.message:String(e))}
+  }catch(e){
+   setLocalError(e instanceof Error?e.message:String(e))
+   try{
+    const reading=await api<HardwareStatus>('/hardware/status')
+    onReading(reading)
+    setTargets(Object.fromEntries(reading.servos.filter(servo=>servo.position!=null).map(servo=>[servo.id,servo.position!])))
+    setPending({})
+    setAllServoTarget(0)
+   }catch{}
+  }
   finally{
    sending.current=false
    setMovingIds([])
-   if(Object.keys(pending.current).length)timer.current=window.setTimeout(flush,900)
   }
  }
- const queue=(id:number,value:number)=>{
+ const enableTorque=async()=>{
+  if(torqueBusy||!torqueOffIds.length)return
+  if(!control?.writes_enabled||status.stopped||!hardware?.connected){setLocalError('Torque control is unavailable. No torque command was sent.');return}
+  setTorqueBusy(true);setLocalError('')
+  try{
+   await api('/hardware/torque/enable',{method:'POST',body:json({servo_ids:torqueOffIds})})
+   onReading(await api<HardwareStatus>('/hardware/status'))
+  }catch(e){setLocalError(e instanceof Error?e.message:String(e))}
+  finally{setTorqueBusy(false)}
+ }
+ const stage=(id:number,value:number)=>{
+  if(sending.current)return
   setTargets(current=>({...current,[id]:value}))
-  const c=latest.current.cal.find(item=>item.servo_id===id)
-  if(!Number.isInteger(value)||!c?.jog_limits_verified||value<c.min_count||value>c.max_count){setLocalError(`Servo ${id} target must be within its saved limits.`);return}
-  pending.current[id]=value
+  setPending(current=>({...current,[id]:value}))
+  setAllServoTarget(0)
   setLocalError('')
-  if(timer.current!==null)window.clearTimeout(timer.current)
-  timer.current=window.setTimeout(flush,900)
+  setLocalNotice('')
+ }
+ const stageAllServos=(value:number)=>{
+  if(sending.current)return
+  const updates=Object.fromEntries(allServoIds.map(id=>[id,value]))
+  setTargets(current=>({...current,...updates}))
+  setPending(current=>({...current,...updates}))
+  setAllServoTarget(value)
+  setLocalError('')
+  setLocalNotice('')
+ }
+ const discard=()=>{setPending({});setAllServoTarget(0);setTargets(Object.fromEntries((hardware?.servos??[]).filter(servo=>servo.position!=null).map(servo=>[servo.id,servo.position!])));setLocalError('');setLocalNotice('')}
+ const pendingCount=Object.keys(pending).length
+ const available=!!control?.writes_enabled&&!status.stopped&&!!hardware?.connected
+ const torqueOffIds=(hardware?.servos??[]).filter(servo=>servo.torque_enabled===false).map(servo=>servo.id)
+ const previewValues:Record<number,number>=Object.fromEntries(allServoIds.map(id=>{
+  const count=targets[id]??hardware?.servos.find(servo=>servo.id===id)?.position??0
+  return [id,Math.round(Math.max(0,Math.min(maxServoCount,count))/maxServoCount*100)]
+ }))
+ // These controls intentionally send raw count targets, matching multi_servo.py.
+ const allFingersAvailable=available&&!movingIds.length
+ const servoControl=(id:number)=>{
+  const index=id-1,name=servos[index],live=hardware?.servos.find(item=>item.id===id)
+  const minimum=0,maximum=maxServoCount,target=targets[id]??live?.position??minimum,speed=speeds[id]??control?.position_speed_default??2400
+  const editable=available&&!movingIds.length
+  return <div key={id} className="rounded-xl border border-[#e5ebe5] p-3 bg-[#fcfdfc]">
+   <div className="flex justify-between gap-2 items-center"><div className="min-w-0"><div className="text-[9px] font-extrabold tracking-[.1em] text-[#8d9d90]">SERVO 0{id} · {servoMounts.find(m=>m.id===id)?.location.toUpperCase()}</div><h3 className="font-bold text-sm mt-1 mb-0 leading-tight">{name}</h3></div><span className="text-[10px] text-[#607669] text-right shrink-0">Now <b>{live?.position??'—'}</b><br/>{movingIds.includes(id)?'Sending':pending[id]!==undefined?'Pending':live?.moving?'Moving':'Stopped'}</span></div>
+   <div className="grid grid-cols-[1fr_76px] gap-2 items-center mt-3"><input aria-label={`${name} target count slider`} type="range" min={minimum} max={maximum} value={Math.max(minimum,Math.min(maximum,target))} onChange={e=>stage(id,Number(e.target.value))} className="w-full" disabled={!editable}/><input aria-label={`${name} target count`} className="field !py-1.5 !px-2 text-xs" type="number" min={minimum} max={maximum} step="1" value={target} disabled={!editable} onChange={e=>stage(id,Number(e.target.value))}/></div>
+   <div className="flex justify-between text-[9px] text-[#94a39a] mt-0.5"><span>0</span><span>Target count</span><span>4000</span></div>
+   <div className="grid grid-cols-[max-content_1fr] gap-2 items-center mt-2"><span className="text-[10px] font-bold text-[#6b7f72] whitespace-nowrap">Speed {speed}</span><input aria-label={`${name} speed`} type="range" min={control?.position_speed_min??50} max={control?.position_speed_max??2400} step="25" value={speed} onChange={e=>setSpeeds(current=>({...current,[id]:Number(e.target.value)}))} className="w-full" disabled={!editable}/></div>
+  </div>
  }
  return <section className="card p-5 md:p-7 mb-5">
-  <div className="flex flex-wrap items-start justify-between gap-3"><div><Eyebrow>Physical glove</Eyebrow><h2 className="text-xl font-bold mt-1">Live servo positions</h2><p className="text-sm text-[#63796a] mt-2 max-w-2xl">Adjust targets directly. Changes made close together are sent in one synchronized packet; number fields send when you leave the field or press Enter.</p></div><Pill tone={control?.writes_enabled?'green':'amber'}>{control?.writes_enabled?'Live control ready':'Motor control locked'}</Pill></div>
+  <div className="flex flex-wrap items-start justify-between gap-3"><div><Eyebrow>Physical glove</Eyebrow><h2 className="text-xl font-bold mt-1">Live servo positions</h2><p className="text-sm text-[#63796a] mt-2 max-w-2xl">Stage raw targets from 0–4000, then click Confirm movement. Multiple targets are sent together in one synchronized packet.</p></div><Pill tone={control?.writes_enabled?'green':'amber'}>{control?.writes_enabled?'Control ready':'Motor control locked'}</Pill></div>
+  {!!hardware?.connected&&torqueOffIds.length>0&&<div role="status" className="message message-error mt-4"><b>Torque is off on servo{torqueOffIds.length===1?'':'s'} {torqueOffIds.join(', ')}.</b><p className="mt-1">Targets will not move until you explicitly enable torque. The site checks that each selected servo is stationary and healthy first.</p><button className="btn btn-secondary mt-3" onClick={enableTorque} disabled={!available||torqueBusy}>{torqueBusy?'Enabling torque…':`Enable torque for ${torqueOffIds.join(', ')}`}</button></div>}
   {localError&&<div role="alert" className="message message-error mt-4">{localError}<button onClick={()=>setLocalError('')} aria-label="Dismiss warning"><X size={16}/></button></div>}
-  <div className="grid lg:grid-cols-2 gap-3 mt-6">{servos.map((name,index)=>{
-   const id=index+1,c=cal.find(item=>item.servo_id===id),live=hardware?.servos.find(item=>item.id===id)
-   const minimum=c?.min_count??0,maximum=c?.max_count??4000,target=targets[id]??live?.position??minimum,speed=speeds[id]??control?.position_speed_default??500
-   const available=!!control?.writes_enabled&&!status.stopped&&!!hardware?.connected&&!!c?.jog_limits_verified
-   return <div key={id} className="rounded-xl border border-[#e5ebe5] p-4 bg-[#fcfdfc]">
-    <div className="flex justify-between gap-2 items-start"><div><div className="text-[10px] font-extrabold tracking-[.13em] text-[#8d9d90]">SERVO 0{id} · {servoMounts.find(m=>m.id===id)?.location.toUpperCase()}</div><h3 className="font-bold text-base mt-1 mb-0">{name}</h3></div><span className="text-xs text-[#607669] text-right">Now <b>{live?.position??'—'}</b><br/>{movingIds.includes(id)?'Sending':live?.moving?'Moving':'Stopped'}</span></div>
-    <div className="grid grid-cols-[1fr_100px] gap-3 items-end mt-5"><label className="text-xs font-bold text-[#6b7f72]">Target count<input aria-label={`${name} target count slider`} type="range" min={minimum} max={maximum} value={Math.max(minimum,Math.min(maximum,target))} onChange={e=>queue(id,Number(e.target.value))} className="w-full mt-3" disabled={!available}/></label><input aria-label={`${name} target count`} className="field" type="number" min={minimum} max={maximum} step="1" value={target} disabled={!available} onFocus={()=>{numberFocused.current=true;if(timer.current!==null)window.clearTimeout(timer.current)}} onChange={e=>setTargets(current=>({...current,[id]:Number(e.target.value)}))} onBlur={e=>{numberFocused.current=false;queue(id,Number(e.target.value))}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur()}}/></div>
-    <div className="flex justify-between text-[10px] text-[#94a39a] mt-1"><span>{minimum} min</span><span>{maximum} max</span></div>
-    <div className="grid grid-cols-[1fr_70px] gap-3 items-center mt-4"><label className="text-xs font-bold text-[#6b7f72]">Speed · {speed} counts/s<input aria-label={`${name} speed`} type="range" min={control?.position_speed_min??50} max={control?.position_speed_max??2400} step="25" value={speed} onChange={e=>setSpeeds(current=>({...current,[id]:Number(e.target.value)}))} className="w-full mt-2" disabled={!available}/></label><span className="text-right text-[10px] text-[#87978a]">50–{control?.position_speed_max??2400}</span></div>
-    {!c?.jog_limits_verified&&<span className="text-xs font-bold text-[#976a20] mt-3 block">Measured limits unavailable</span>}
-   </div>
-  })}</div>
-  <p className="text-xs text-[#839187] mt-5">Editing a target can move the physical glove. Saved travel limits, device health checks, and Stop remain active. Keep the physical power cutoff within reach.</p>
+  {localNotice&&<div role="status" className="message message-success mt-4">{localNotice}</div>}
+  <div className="mt-5 rounded-xl border border-[#d9e6dc] bg-[#f5faf6] p-3 md:px-4"><div className="flex items-center justify-between gap-3"><h3 className="font-bold text-sm">All servos</h3><b className="text-sm text-[#1e4937] whitespace-nowrap">{allServoTarget} counts</b></div><input aria-label="All servos target count slider" type="range" min="0" max={maxServoCount} step="1" value={allServoTarget} onChange={e=>stageAllServos(Number(e.target.value))} disabled={!allFingersAvailable} className="w-full mt-2"/><div className="flex justify-between text-[10px] text-[#94a39a] mt-0.5"><span>0</span><span>2000</span><span>4000</span></div></div>
+  <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(290px,0.9fr)_minmax(0,1fr)] gap-3 mt-4 items-center">
+   <div className="flex flex-col gap-3 xl:col-start-1 xl:row-start-1">{[1,2,3].map(servoControl)}</div>
+   <div className="rounded-xl border border-[#e5ebe5] bg-[#fcfdfc] p-2 xl:col-start-2 xl:row-start-1"><div className="hand-diagram hand-photo-stage rounded-lg" style={{height:420}}><Hand3D values={previewValues} viewKey="manual-target-preview"/><span className="diagram-label">3D · DRAG TO ROTATE</span></div></div>
+   <div className="flex flex-col gap-3 xl:col-start-3 xl:row-start-1">{[4,5,6].map(servoControl)}</div>
+  </div>
+  <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#d9e6dc] bg-[#f5faf6] p-3"><div className="flex-1 text-sm text-[#4f6658]">{pendingCount?`${pendingCount} servo ${pendingCount===1?'target':'targets'} pending. Confirm sends them together.`:'No pending movement.'}</div><button className="btn btn-secondary" onClick={discard} disabled={!pendingCount||!!movingIds.length}>Discard changes</button><button className="btn btn-primary" onClick={confirm} disabled={!pendingCount||!available||!!movingIds.length}>{movingIds.length?'Sending / waiting for settle…':'Confirm movement'}</button></div>
+  <p className="text-xs text-[#839187] mt-5">Only Confirm movement sends physical targets. Manual targets use raw servo counts and may exceed calibrated travel; inspect the glove path before moving. Device health checks and Stop remain active. Keep the physical power cutoff within reach.</p>
  </section>
 }
-function Manual({status,hardware,cal,onReading}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void}){
- return <HardwareManual status={status} hardware={hardware} cal={cal} onReading={onReading}/>
+function Manual({status,hardware,onReading}:{status:Status,hardware:HardwareStatus|null,onReading:(reading:HardwareStatus)=>void}){
+ return <HardwareManual status={status} hardware={hardware} onReading={onReading}/>
 }
 function MacroStudio({macros,status,refresh,action,play,manual}:{macros:Macro[],status:Status,refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>,play:(m:Macro)=>void,manual:Record<number,number>}){const [selected,setSelected]=useState<string|null>(null),[draft,setDraft]=useState<Omit<Macro,'id'>>({name:'',description:'',kind:'pose',steps:[{positions:blank(),duration_ms:700}]}),[editing,setEditing]=useState(false),file=useRef<HTMLInputElement>(null)
  const edit=(m:Macro)=>{setSelected(m.id);setDraft({name:m.name,description:m.description,kind:m.kind,steps:structuredClone(m.steps)});setEditing(true)}
@@ -341,6 +397,7 @@ function MacroStudio({macros,status,refresh,action,play,manual}:{macros:Macro[],
  return <><div className="flex flex-wrap gap-2 mb-5"><button className="btn btn-primary flex items-center gap-2" onClick={fresh}><Plus size={17}/> New macro</button><button className="btn btn-secondary flex items-center gap-2" onClick={exportFile}><ArrowDownToLine size={16}/> Export</button><button className="btn btn-secondary flex items-center gap-2" onClick={()=>file.current?.click()}><ArrowUpFromLine size={16}/> Import</button><input ref={file} type="file" accept="application/json,.json" className="hidden" onChange={e=>{if(e.target.files?.[0])importFile(e.target.files[0]);e.currentTarget.value=''}}/></div><div className="macro-table"><div className="macro-table-head"><span>GESTURE</span><span>TYPE</span><span>CHANNELS</span><span>ACTIONS</span></div>{macros.map((m,i)=><div key={m.id} className="macro-table-row"><span className="macro-index">{String(i+1).padStart(2,'0')}</span><div className="macro-title"><b>{m.name}</b><small>{m.description||'Custom movement'}</small></div><span className="macro-kind">{m.kind==='pose'?'Pose':`Sequence · ${m.steps.length} steps`}</span><div className="macro-channel-bars" aria-label="First step position by servo">{servos.map((_,j)=><span key={j}><i style={{height:`${m.steps[0].positions[j+1]}%`}}/></span>)}</div><div className="macro-actions"><button disabled={status.stopped} className="macro-play" onClick={()=>play(m)}><Play size={13} fill="currentColor"/> Play</button><button aria-label={`Edit ${m.name}`} onClick={()=>edit(m)}><Settings2 size={16}/></button><button aria-label={`Delete ${m.name}`} onClick={()=>remove(m)}><Trash2 size={15}/></button></div></div>)}</div>
  {editing&&<div className="fixed inset-0 bg-[#0d2520]/60 z-40 flex justify-end" onClick={()=>setEditing(false)}><div className="h-full w-full max-w-[590px] bg-[#f8faf7] overflow-y-auto mini-scroll p-6 md:p-8" onClick={e=>e.stopPropagation()}><div className="flex justify-between items-start"><div><Eyebrow>Macro editor</Eyebrow><h2 className="text-2xl font-bold mt-1">{selected?'Edit macro':'Create macro'}</h2></div><button aria-label="Close editor" onClick={()=>setEditing(false)}><X/></button></div><label className="block text-sm font-bold mt-7 mb-2">Name</label><input className="field" value={draft.name} maxLength={60} onChange={e=>setDraft({...draft,name:e.target.value})}/><label className="block text-sm font-bold mt-4 mb-2">Description</label><textarea className="field" rows={2} value={draft.description} maxLength={240} onChange={e=>setDraft({...draft,description:e.target.value})}/><label className="block text-sm font-bold mt-4 mb-2">Type</label><select className="field" value={draft.kind} onChange={e=>{const kind=e.target.value as 'pose'|'sequence';setDraft({...draft,kind,steps:kind==='pose'?draft.steps.slice(0,1):draft.steps})}}><option value="pose">Pose · one position</option><option value="sequence">Sequence · timed steps</option></select><div className="mt-7 space-y-4">{draft.steps.map((step,stepIndex)=><div key={stepIndex} className="card p-5"><div className="flex justify-between items-center mb-4"><h3 className="font-bold">Step {stepIndex+1}</h3>{draft.kind==='sequence'&&draft.steps.length>1&&<button className="text-red-600 text-xs font-bold flex items-center gap-1" onClick={()=>setDraft({...draft,steps:draft.steps.filter((_,i)=>i!==stepIndex)})}><Trash2 size={14}/> Remove</button>}</div><div className="grid grid-cols-2 gap-3">{servos.map((name,i)=><label key={i} className="text-xs font-semibold text-[#62776c]">{name}<div className="flex gap-2 items-center"><input aria-label={`${name} step ${stepIndex+1}`} className="w-full" type="range" min="0" max="100" value={step.positions[i+1]} onChange={e=>{const steps=structuredClone(draft.steps);steps[stepIndex].positions[i+1]=Number(e.target.value);setDraft({...draft,steps})}}/><span className="w-7 text-right text-teal">{step.positions[i+1]}</span></div></label>)}</div><label className="block text-xs font-bold text-[#62776c] mt-4">Move duration (ms)</label><input className="field mt-1" type="number" min="100" max="10000" value={step.duration_ms} onChange={e=>{const steps=structuredClone(draft.steps);steps[stepIndex].duration_ms=Number(e.target.value);setDraft({...draft,steps})}}/></div>)}</div>{draft.kind==='sequence'&&<button className="btn btn-secondary mt-4 flex items-center gap-2" disabled={draft.steps.length>=30} onClick={()=>setDraft({...draft,steps:[...draft.steps,{positions:{...draft.steps.at(-1)!.positions},duration_ms:700}]})}><Plus size={16}/> Add step</button>}<div className="sticky bottom-0 bg-[#f8faf7] py-5 mt-6 border-t flex gap-2"><button className="btn btn-primary flex-1 flex justify-center gap-2" onClick={save}><Save size={16}/> Save macro</button><button className="btn btn-secondary" onClick={()=>setEditing(false)}>Cancel</button></div></div></div>}
  </>}
+
 function Vision(){
  const video=useRef<HTMLVideoElement>(null)
  const stream=useRef<MediaStream|null>(null)
@@ -364,6 +421,66 @@ function Vision(){
   }catch(error){setCameraError(error instanceof Error?error.message:String(error))}
  }
  return <div className="vision-preview"><div className="card p-5 md:p-6"><div className="flex justify-between items-start mb-4"><div><Eyebrow>Camera input</Eyebrow><h2 className="text-xl font-bold mt-1">Live preview</h2></div><Pill tone={camera?'green':'gray'}>{camera?'Browser camera':'Camera off'}</Pill></div><div className="aspect-video rounded-2xl bg-[#172d29] grid place-items-center overflow-hidden relative"><video ref={video} autoPlay playsInline muted className={`w-full h-full object-cover ${camera?'':'hidden'}`}/>{!camera&&<div className="text-center text-[#97b7a9]"><Camera className="mx-auto mb-3" size={36}/><div className="font-bold">No camera preview</div><div className="text-xs mt-1">Connect a browser camera to view its feed</div></div>}<span className="absolute left-4 bottom-4 rounded-full bg-[#152d29]/80 text-white text-[10px] px-3 py-1.5 font-bold">NO OBJECT DETECTOR RUNNING</span></div>{cameraError&&<p className="text-red-600 text-xs mt-2">{cameraError}</p>}<button className="btn btn-primary mt-4" onClick={toggle}>{camera?'Stop preview':'Start camera preview'}</button><p className="text-xs text-[#849087] mt-3">Camera video stays in this browser. The preview does not analyze frames or identify objects.</p></div></div>
+}
+type CalibrationCountField = 'open_count' | 'closed_count' | 'min_count' | 'max_count'
+const calibrationFields: [CalibrationCountField, string][] = [
+ ['open_count', 'Open position'],
+ ['closed_count', 'Closed position'],
+ ['min_count', 'Minimum limit'],
+ ['max_count', 'Maximum limit'],
+]
+function CalibrationPage({cal,hardware,onReading,refresh,action}:{
+ cal:Calibration[],hardware:HardwareStatus|null,onReading:(reading:HardwareStatus)=>void,
+ refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>
+}){
+ const [draft,setDraft]=useState<Calibration[]>([])
+ const [capturing,setCapturing]=useState<string|null>(null)
+ useEffect(()=>setDraft(cal.map(c=>({...c}))),[cal])
+ const change=(id:number,patch:Partial<Calibration>)=>setDraft(current=>current.map(c=>c.servo_id===id?{...c,...patch,verified:false,jog_limits_verified:'min_count' in patch||'max_count' in patch?false:c.jog_limits_verified}:c))
+ const capture=async(id:number,key:CalibrationCountField,label:string)=>{
+  const captureId=`${id}-${key}`
+  setCapturing(captureId)
+  try{
+   await action(async()=>{
+    const reading=await api<HardwareStatus>('/hardware/status')
+    onReading(reading)
+    const servo=reading.servos.find(item=>item.id===id)
+    const position=servo?.position
+    if(!servo || typeof position!=='number' || !Number.isInteger(position) || position<0 || position>maxServoCount){
+     throw Error(reading.error || `No valid position reading from Servo ${id}. Check its connection and retry.`)
+    }
+    if(servo.moving!==false)throw Error(`Servo ${id} may be moving. Wait until it is still, then retry.`)
+    change(id,{[key]:position})
+    return position
+   },`Captured Servo ${id} ${label.toLowerCase()} in the unsaved form`)
+  }finally{setCapturing(null)}
+ }
+ const save=async(c:Calibration)=>{
+  const result=await action(()=>api(`/calibration/${c.servo_id}`,{method:'PUT',body:json(c)}),`Servo ${c.servo_id} calibration saved`)
+  if(result)await refresh()
+ }
+ return <>
+  <div className="rounded-2xl p-5 mb-5 bg-[#fff6df] border border-[#f0e3ba] text-[#7b652e] flex gap-3">
+   <ShieldCheck size={22} className="shrink-0"/>
+   <div className="text-sm leading-6"><b>Measure before verifying.</b> The app accepts raw counts from 0 to 4000. Direct-test limits and open/closed positions are checked separately. The starting values are placeholders. Capture reads the current position; it does not move a motor or save calibration.</div>
+  </div>
+  <div className="grid xl:grid-cols-2 gap-4">{draft.map(c=>{
+   const live=hardware?.servos.find(servo=>servo.id===c.servo_id)
+   return <div className="card p-5" key={c.servo_id}>
+    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id} · {servoMounts.find(mount=>mount.id===c.servo_id)?.location}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><div className="flex flex-wrap gap-1 justify-end"><Pill tone={c.jog_limits_verified?'green':'amber'}>{c.jog_limits_verified?'Test limits checked':'Test limits unverified'}</Pill><Pill tone={c.verified?'green':'gray'}>{c.verified?'Gestures calibrated':'Gestures uncalibrated'}</Pill></div></div>
+    <div className="rounded-xl border border-[#e8ece8] bg-[#f8faf7] px-4 py-3 mb-4 flex flex-wrap justify-between gap-2 text-sm"><span className="text-[#63796a]">Latest position reading</span><b className="text-[#1e4937]">{live?.position==null?'No reading':`${live.position} counts`}</b></div>
+    <div className="grid grid-cols-2 gap-3">{calibrationFields.map(([key,fingerLabel])=>{
+     const label=c.servo_id>=5 && key==='open_count'?'Position A':c.servo_id>=5 && key==='closed_count'?'Position B':fingerLabel
+     const inputId=`servo-${c.servo_id}-${key}`
+     return <div key={key} className="min-w-0"><label htmlFor={inputId} className="text-xs font-bold text-[#6b7f72]">{label}</label><input id={inputId} className="field mt-1" type="number" min="0" max={maxServoCount} value={c[key]} onChange={e=>change(c.servo_id,{[key]:Math.min(maxServoCount,Math.max(0,Number(e.target.value)))})}/><button type="button" className="text-xs font-bold text-teal mt-2 disabled:opacity-50" disabled={capturing!==null} onClick={()=>capture(c.servo_id,key,label)} aria-label={`Capture ${label.toLowerCase()} for Servo ${c.servo_id}`}>{capturing===`${c.servo_id}-${key}`?'Reading…':'Capture current position'}</button></div>
+    })}</div>
+    <div className="grid grid-cols-2 gap-3 mt-4"><label className="text-xs font-bold text-[#6b7f72]">Position direction<select className="field mt-1" value={c.direction} onChange={e=>change(c.servo_id,{direction:e.target.value as Calibration['direction']})}><option value="increasing">Counts increase</option><option value="decreasing">Counts decrease</option></select></label><label className="text-xs font-bold text-[#6b7f72]">Gesture speed cap (%)<input className="field mt-1" type="number" min="1" max="100" value={c.speed} onChange={e=>change(c.servo_id,{speed:Number(e.target.value)})}/></label></div>
+    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.jog_limits_verified||false} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,jog_limits_verified:e.target.checked}:x))} className="mt-1"/> I measured the minimum and maximum counts for a small direct test on this servo.</label>
+    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-3 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I also measured open and closed positions and direction for saved gestures.</label>
+    <button className="btn btn-primary mt-4 flex items-center gap-2" onClick={()=>save(c)}><Save size={15}/> Save calibration</button>
+   </div>
+  })}</div>
+ </>
 }
 function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'

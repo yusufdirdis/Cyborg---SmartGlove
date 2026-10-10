@@ -41,6 +41,7 @@ npm run dev -- --port 5173
 
 Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>. The Vite server proxies `/api` and `/ws` to the local API. Keep both terminals running.
 
+
 On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 2 JSON file; importing adds copies of its macros. Older version 1 exports are accepted and remapped to the corrected finger IDs. Sequences have up to 30 steps with 100–10,000 ms duration per step.
 
 ## Try the first milestone
@@ -50,7 +51,7 @@ On first launch, `backend/handos.sqlite3` is created with five editable sample p
 3. Choose **Play**. The Dashboard channel meters and WebSocket telemetry update as the six simulated channels move.
 4. Use **Stop** to latch the software stop; **Reset simulation** allows movement again.
 
-Manual Control contains only live physical servo position and speed controls. Moving a target slider queues a motor command automatically; number fields queue when focus leaves or Enter is pressed. Saved macros still preview in simulation. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
+Manual Control lets you stage physical servo targets and review them before sending. Target edits stay pending until **Confirm movement** is clicked. Saved macros still preview in simulation. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
 
 ## Read-only controller status
 
@@ -60,15 +61,15 @@ Connect the servo controller by USB and power its servo bus. The Dashboard hardw
 
 The Dashboard's **YOUR GLOVE** panel shows a 3D model of the glove, built from photos of the real hardware: back and palm cord guides on every finger segment, both curved anchor blocks, cords and tubes. Drag to rotate; switching the **Simulated / Physical** toggle swings the view back to straight on. **Simulated** follows macro playback. **Physical** follows the real servos: while the website is open, the API reads the six present positions about 10 times a second (read-only, never a command, sharing the controller lock with moves and status checks) and maps each raw count to 0–100 % curl with that servo's saved open and closed counts. A **Calibration unverified** badge shows until those counts are measured. The thumb uses collision avoidance so it rests on top of curled fingers instead of passing through them. Set `HANDOFF_LIVE_POSITIONS=0` to turn the position reads off.
 
-The website does not expose a Calibration page. Existing measured servo limits remain stored in SQLite and are checked by live motor control. If limits need changing, update them through the local API after physically measuring the servo travel.
+The **Calibration** page lets you read the current position into an unsaved form, edit endpoints and travel limits, mark measurements, then save them to the local database. Position capture is read-only. The initial values are placeholders: measure the actual hardware before marking limits verified. Updating limits clears their verified state until you verify and save them again.
 
 ### Website hardware controls
 
-**Manual Control → Live servo positions** has a raw-count target and speed for each servo. The target slider is constrained by saved measured direct-test limits. Speeds range from **50 to 2400 counts per second**, default **500**. Editing a slider or finishing a number-field edit queues that target; edits within 900 ms are combined into one `SyncWritePosEx` packet. Further edits wait for the current serial request, then send the latest queued targets. There is no group selection button or confirmation form. This is live physical control when hardware writes are enabled. The API still checks each selected servo's model, position mode, torque, voltage, temperature, current position, and saved travel limits, and rejects commands while software Stop is latched. A new target may be sent while a previous movement is settling. The physical power cutoff remains the reliable emergency stop. No move returns automatically.
+**Manual Control → Live servo positions** has a rotatable 3D hand preview that updates from staged targets, a raw-count target and speed for each servo, and an **All servos** slider that stages the same target count from **0–4000** for IDs 1–6, including both thumb motors. The preview normalizes raw counts across 0–4000; actual glove travel can differ. Target edits are staged locally; **Confirm movement** sends selected pending targets together in one request. A multi-servo move uses one synchronized packet, matching `multi_servo.py`. **Discard changes** resets staged targets to the latest read positions. Saved calibration remains available for gesture mapping. If a servo has torque off, click **Enable torque** first. The API checks each selected servo's model, position mode, torque, voltage, temperature, and current position, and rejects commands while software Stop is latched. The physical power cutoff remains the reliable emergency stop. No move returns automatically.
 
 On 2026-10-10, a supervised terminal test sent one Servo 1 command from 1004 to 1250 at requested speed 2400 and acceleration 50. It settled at 1248 in about 0.5 seconds. This does not establish the speed or safe travel of other channels or simultaneous moves. Start at a lower setting for channels whose response has not been observed. The manufacturer's [STS3215 specifications](https://www.feetechrc.com/525603.html) describe the servo's 12 V position control and higher no-load speed; 2400 is a requested controller speed, not a guarantee of actual glove speed.
 
-Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits to move motors. Saved measured limits and device-health checks remain enforced for every edited servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors.
+Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits or the explicit torque-enable button to write to motors. Health checks remain enforced for every selected servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors.
 
 When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
 
@@ -88,7 +89,7 @@ The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and commo
 
 ## Safety boundary
 
-Saved gestures and vision events remain **simulation only**. Manual Control's raw-count targets are live physical controls when writes are enabled. The live route checks saved travel bounds, position mode, torque, voltage, temperature, and Stop before every sync packet. The UI has no per-move confirmation, so edit physical targets only with the glove off-body and the independent power cutoff ready.
+Saved gestures and vision events remain **simulation only**. Manual Control's raw-count targets can move the hardware when writes are enabled and the user confirms them. The live route checks position mode, torque, voltage, temperature, and Stop before each command. Keep the glove off-body and the independent power cutoff ready when testing physical movement.
 
 The physical power cutoff must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their broad movement commands are not exposed by the website.
 

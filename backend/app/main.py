@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
+
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
 MAX_SERVO_COUNT = 4000  # User-requested app cap; not a measured mechanical limit.
 # The first release used index, middle, thumb flexion, thumb opposition, ring,
@@ -289,6 +290,10 @@ class LiveMoveInput(BaseModel):
     moves: list[PositionPreviewInput] = Field(min_length=1, max_length=6)
 
 
+class TorqueEnableInput(BaseModel):
+    servo_ids: list[int] = Field(min_length=1, max_length=6)
+
+
 def _local_hardware_request(request: Request) -> None:
     client_host = request.client.host if request.client else ""
     origin = request.headers.get("origin")
@@ -447,16 +452,20 @@ def move_hardware_live(payload: LiveMoveInput, request: Request):
     ids = [move.servo_id for move in payload.moves]
     if len(ids) != len(set(ids)):
         raise HTTPException(422, "Each servo can appear only once in a live move.")
-    with db() as conn:
-        rows = {row["servo_id"]: row["data"] for row in conn.execute(
-            f"SELECT servo_id, data FROM calibration WHERE servo_id IN ({','.join('?' for _ in ids)})", ids
-        )}
-    if set(rows) != set(ids):
-        raise HTTPException(409, "Calibration is unavailable for a selected servo.")
-    calibrations = {servo_id: CalibrationInput.model_validate_json(rows[servo_id]) for servo_id in ids}
     try:
         return move_live([(move.servo_id, move.target, move.speed) for move in payload.moves],
-                         calibrations, sim.stopped, is_stopped=lambda: sim.stopped)
+                         sim.stopped, is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/torque/enable")
+def enable_hardware_torque(payload: TorqueEnableInput, request: Request):
+    from .hardware_control import HardwareControlError, enable_torque
+
+    _local_hardware_request(request)
+    try:
+        return enable_torque(payload.servo_ids, sim.stopped)
     except HardwareControlError as exc:
         raise HTTPException(409, str(exc)) from exc
 
