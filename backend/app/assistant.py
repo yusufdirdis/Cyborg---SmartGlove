@@ -442,9 +442,9 @@ Servos, in this exact order (IDs 1-6):
 A position is an integer percentage: 0 = finger fully open/relaxed, 100 = fully flexed.
 Saved macros, as id (name): {saved}. Prefer a matching saved macro over a new pose.
 When the user asks to save a movement as a macro, call propose_save_macro with its steps; to save what you last proposed, reuse those exact positions.
-Only call a tool when the user asks for a move, a mirror or a save. Never call a tool for questions, small talk or descriptions.
+Only call a tool when the user asks for a move, a mirror, a save or a stop. Never call a tool for questions, small talk or descriptions.
 Never say or imply the hand already moved or that anything was saved; say it is ready for the user's Confirm click.
-When the user says "stop", call stop_hand right away."""
+When the user says "stop", "halt", "freeze" or "emergency", call stop_hand right away, before anything else, even mid-sentence."""
 
 
 LIVE_TOOLS = [{"functionDeclarations": [
