@@ -1,9 +1,9 @@
 import React, {useEffect, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {ArrowDownToLine, ArrowUpFromLine, Camera, CircleHelp, Cpu, Hand, LayoutDashboard, Menu, Pause, Play, Plus, RotateCcw, Save, Settings2, ShieldCheck, SlidersHorizontal, Square, Trash2, X} from 'lucide-react'
+import {ArrowDownToLine, ArrowUpFromLine, Camera, CircleHelp, Cpu, Hand, LayoutDashboard, Menu, Pause, Play, Plus, RotateCcw, Save, Settings2, SlidersHorizontal, Square, Trash2, X} from 'lucide-react'
 import './index.css'
 
-type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Calibration'|'Devices'
+type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Devices'
 type Step = {positions: Record<number,number>,duration_ms:number}
 type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[]}
 type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
@@ -12,7 +12,6 @@ type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,mode
 type JogPreview = {servo_id:number,start:number,target:number,delta:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 type HardwareControlInfo = {writes_enabled:boolean,step_counts:number,position_speed_min:number,position_speed_max:number,position_speed_default:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
-const maxServoCount = 4000
 const servoMounts = [
  {id:4,location:'Top left'}, {id:3,location:'Top right'},
  {id:5,location:'Middle left'}, {id:2,location:'Middle right'},
@@ -34,7 +33,7 @@ function App(){
  const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:{attempted:boolean,failed_ids?:number[],message:string}}>('/control/stop',{method:'POST'}));if(result)setNotice(`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`)}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
  const applyManual=()=>action(()=>api('/control/pose',{method:'POST',body:json({positions:manual})}),'Pose sent to simulation')
- const nav:[Page,React.ElementType][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Calibration',Settings2],['Devices',Cpu]]
+ const nav:[Page,React.ElementType][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Devices',Cpu]]
  const navigate=(next:Page)=>{setPage(next);setMenuOpen(false);setNotice('');window.scrollTo({top:0,behavior:'smooth'})}
  return <div className="app-layout">
   <aside className={`app-sidebar ${menuOpen?'open':''}`}>
@@ -51,16 +50,16 @@ function App(){
     {page!=='Dashboard'&&<div className="page-heading"><div><div className="section-kicker">WORKSPACE / {page.toUpperCase()}</div><h1>{page}</h1><p>{subtitles[page]}</p></div><div className="page-actions"><button className="stop-button" onClick={stop}><Square size={13} fill="currentColor"/> Stop</button>{status.stopped&&<button className="btn btn-secondary flex items-center gap-2" onClick={reset}><RotateCcw size={16}/> Reset software stop</button>}</div></div>}
     {status.stopped&&<div className="stop-message"><Pause size={20}/><div><b>Software stop is latched.</b> Simulation is halted. If hardware control was enabled, servo torque-off was attempted; use the physical power cutoff if the glove moves.</div>{page==='Dashboard'&&<button className="btn btn-secondary" onClick={reset}>Reset software stop</button>}</div>}
     {page==='Dashboard'&&<Dashboard status={status} hardware={hardware} macros={macros} play={play} go={navigate} stop={stop}/>}
-    {page==='Manual Control'&&<Manual status={status} hardware={hardware} cal={cal} onReading={setHardware} manual={manual} setManual={setManual} apply={applyManual} go={navigate}/>}
+    {page==='Manual Control'&&<Manual status={status} hardware={hardware} cal={cal} onReading={setHardware} manual={manual} setManual={setManual} apply={applyManual}/>}
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={manual}/>}
     {page==='AI Vision'&&<Vision/>}
-    {page==='Calibration'&&<CalibrationPage cal={cal} hardware={hardware} onReading={setHardware} refresh={refresh} action={action}/>}
-    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware} action={action} go={navigate}/>}
+
+    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware} action={action}/>}
    </main>
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Adjust physical servo targets live, or try a simulated pose.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record direct-test limits and gesture positions separately.',Devices:'See live servo status and check small movement commands.'}
+const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Adjust physical servo targets live, or try a simulated pose.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Devices:'See live servo status and check small movement commands.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 function HandGraphic(){
@@ -79,7 +78,7 @@ function Dashboard({status,hardware,macros,play,go,stop}:{status:Status,hardware
  </section>
  <section className="overview-panel gestures-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={21}/></span><div className="panel-head-copy"><div className="section-kicker">SAVED MOVEMENTS</div><h2>Gestures, ready to test.</h2><p>Choose a macro to preview it in the simulated hand.</p></div><button className="plain-link" onClick={()=>go('Macro Studio')}>Open Macro Studio <span aria-hidden="true">↗</span></button></div><div className="overview-gesture-grid">{macros.slice(0,4).map((m,i)=><button key={m.id} disabled={status.stopped} onClick={()=>play(m)} className="overview-gesture"><span className="gesture-index">{String(i+1).padStart(2,'0')}</span><span><b>{m.name}</b><small>{m.description||'Custom gesture'}</small></span><Play size={15} fill="currentColor"/></button>)}</div><div className="panel-note"><span className="status-dot"/><span>{macros.length} saved macros</span></div></section>
  </div>}
-function HardwareManual({status,hardware,cal,onReading,go}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void,go:(page:Page)=>void}){
+function HardwareManual({status,hardware,cal,onReading}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void}){
  const [control,setControl]=useState<HardwareControlInfo|null>(null)
  const [targets,setTargets]=useState<Record<number,number>>({})
  const [speeds,setSpeeds]=useState<Record<number,number>>(()=>{try{return JSON.parse(localStorage.getItem('handoff-manual-speeds')||'{}')}catch{return {}}})
@@ -142,14 +141,14 @@ function HardwareManual({status,hardware,cal,onReading,go}:{status:Status,hardwa
     <div className="grid grid-cols-[1fr_100px] gap-3 items-end mt-5"><label className="text-xs font-bold text-[#6b7f72]">Target count<input aria-label={`${name} target count slider`} type="range" min={minimum} max={maximum} value={Math.max(minimum,Math.min(maximum,target))} onChange={e=>queue(id,Number(e.target.value))} className="w-full mt-3" disabled={!available}/></label><input aria-label={`${name} target count`} className="field" type="number" min={minimum} max={maximum} step="1" value={target} disabled={!available} onFocus={()=>{numberFocused.current=true;if(timer.current!==null)window.clearTimeout(timer.current)}} onChange={e=>setTargets(current=>({...current,[id]:Number(e.target.value)}))} onBlur={e=>{numberFocused.current=false;queue(id,Number(e.target.value))}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur()}}/></div>
     <div className="flex justify-between text-[10px] text-[#94a39a] mt-1"><span>{minimum} min</span><span>{maximum} max</span></div>
     <div className="grid grid-cols-[1fr_70px] gap-3 items-center mt-4"><label className="text-xs font-bold text-[#6b7f72]">Speed · {speed} counts/s<input aria-label={`${name} speed`} type="range" min={control?.position_speed_min??50} max={control?.position_speed_max??2400} step="25" value={speed} onChange={e=>setSpeeds(current=>({...current,[id]:Number(e.target.value)}))} className="w-full mt-2" disabled={!available}/></label><span className="text-right text-[10px] text-[#87978a]">50–{control?.position_speed_max??2400}</span></div>
-    {!c?.jog_limits_verified&&<button className="text-xs font-bold text-[#976a20] underline mt-3" onClick={()=>go('Calibration')}>Verify limits</button>}
+    {!c?.jog_limits_verified&&<span className="text-xs font-bold text-[#976a20] mt-3 block">Measured limits unavailable</span>}
    </div>
   })}</div>
   <p className="text-xs text-[#839187] mt-5">Editing a target can move the physical glove. Saved travel limits, device health checks, and Stop remain active. Keep the physical power cutoff within reach.</p>
  </section>
 }
-function Manual({status,hardware,cal,onReading,manual,setManual,apply,go}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void,manual:Record<number,number>,setManual:(p:Record<number,number>)=>void,apply:()=>void,go:(p:Page)=>void}){
- return <><HardwareManual status={status} hardware={hardware} cal={cal} onReading={onReading} go={go}/><div className="grid xl:grid-cols-[1.1fr_.9fr] gap-5"><div className="card p-5 md:p-7"><div className="flex justify-between items-start mb-6"><div><Eyebrow>Simulation</Eyebrow><h2 className="text-xl font-bold mt-1">Finger controls</h2></div><Pill>0–100% movement</Pill></div><div className="space-y-5">{servos.map((name,i)=><div key={name} className="rounded-xl border border-[#e8ece8] p-4"><div className="flex justify-between mb-4"><div className="font-bold text-sm"><span className="text-teal mr-2">0{i+1}</span>{name}</div><span className="text-teal font-bold">{manual[i+1]}%</span></div><input aria-label={`${name} simulation movement`} type="range" min="0" max="100" value={manual[i+1]} onChange={e=>setManual({...manual,[i+1]:Number(e.target.value)})} className="w-full"/><div className="flex justify-between text-[10px] text-[#94a39a] mt-1"><span>{i<4?'Open':'0%'}</span><span>{i<4?'Closed':'100%'}</span></div></div>)}</div><div className="flex gap-2 mt-5"><button className="btn btn-primary flex items-center gap-2" disabled={status.stopped} onClick={apply}><Play size={16}/> Apply to simulation</button><button className="btn btn-secondary" onClick={()=>setManual(blank())}>Set all to 0%</button></div></div><div className="space-y-5"><div className="card p-5"><Eyebrow>Live preview</Eyebrow><h2 className="text-xl font-bold mt-1 mb-4">Glove</h2><HandGraphic/></div><div className="card p-5 flex items-start gap-3"><CircleHelp className="text-teal shrink-0" size={20}/><div className="text-sm text-[#62756a] leading-6">These sliders use percentages in the simulator. Actual servo counts depend on measured endpoints. <button className="text-teal font-bold" onClick={()=>go('Calibration')}>Set calibration →</button></div></div></div></div></>
+function Manual({status,hardware,cal,onReading,manual,setManual,apply}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void,manual:Record<number,number>,setManual:(p:Record<number,number>)=>void,apply:()=>void}){
+ return <><HardwareManual status={status} hardware={hardware} cal={cal} onReading={onReading}/><div className="grid xl:grid-cols-[1.1fr_.9fr] gap-5"><div className="card p-5 md:p-7"><div className="flex justify-between items-start mb-6"><div><Eyebrow>Simulation</Eyebrow><h2 className="text-xl font-bold mt-1">Finger controls</h2></div><Pill>0–100% movement</Pill></div><div className="space-y-5">{servos.map((name,i)=><div key={name} className="rounded-xl border border-[#e8ece8] p-4"><div className="flex justify-between mb-4"><div className="font-bold text-sm"><span className="text-teal mr-2">0{i+1}</span>{name}</div><span className="text-teal font-bold">{manual[i+1]}%</span></div><input aria-label={`${name} simulation movement`} type="range" min="0" max="100" value={manual[i+1]} onChange={e=>setManual({...manual,[i+1]:Number(e.target.value)})} className="w-full"/><div className="flex justify-between text-[10px] text-[#94a39a] mt-1"><span>{i<4?'Open':'0%'}</span><span>{i<4?'Closed':'100%'}</span></div></div>)}</div><div className="flex gap-2 mt-5"><button className="btn btn-primary flex items-center gap-2" disabled={status.stopped} onClick={apply}><Play size={16}/> Apply to simulation</button><button className="btn btn-secondary" onClick={()=>setManual(blank())}>Set all to 0%</button></div></div><div className="space-y-5"><div className="card p-5"><Eyebrow>Live preview</Eyebrow><h2 className="text-xl font-bold mt-1 mb-4">Glove</h2><HandGraphic/></div><div className="card p-5 flex items-start gap-3"><CircleHelp className="text-teal shrink-0" size={20}/><div className="text-sm text-[#62756a] leading-6">These sliders use percentages in the simulator. Actual servo counts depend on measured endpoints.</div></div></div></div></>
 }
 
 function MacroStudio({macros,status,refresh,action,play,manual}:{macros:Macro[],status:Status,refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>,play:(m:Macro)=>void,manual:Record<number,number>}){const [selected,setSelected]=useState<string|null>(null),[draft,setDraft]=useState<Omit<Macro,'id'>>({name:'',description:'',kind:'pose',steps:[{positions:blank(),duration_ms:700}]}),[editing,setEditing]=useState(false),file=useRef<HTMLInputElement>(null)
@@ -186,67 +185,7 @@ function Vision(){
  }
  return <div className="vision-preview"><div className="card p-5 md:p-6"><div className="flex justify-between items-start mb-4"><div><Eyebrow>Camera input</Eyebrow><h2 className="text-xl font-bold mt-1">Live preview</h2></div><Pill tone={camera?'green':'gray'}>{camera?'Browser camera':'Camera off'}</Pill></div><div className="aspect-video rounded-2xl bg-[#172d29] grid place-items-center overflow-hidden relative"><video ref={video} autoPlay playsInline muted className={`w-full h-full object-cover ${camera?'':'hidden'}`}/>{!camera&&<div className="text-center text-[#97b7a9]"><Camera className="mx-auto mb-3" size={36}/><div className="font-bold">No camera preview</div><div className="text-xs mt-1">Connect a browser camera to view its feed</div></div>}<span className="absolute left-4 bottom-4 rounded-full bg-[#152d29]/80 text-white text-[10px] px-3 py-1.5 font-bold">NO OBJECT DETECTOR RUNNING</span></div>{cameraError&&<p className="text-red-600 text-xs mt-2">{cameraError}</p>}<button className="btn btn-primary mt-4" onClick={toggle}>{camera?'Stop preview':'Start camera preview'}</button><p className="text-xs text-[#849087] mt-3">Camera video stays in this browser. The preview does not analyze frames or identify objects.</p></div></div>
 }
-type CalibrationCountField = 'open_count' | 'closed_count' | 'min_count' | 'max_count'
-const calibrationFields: [CalibrationCountField, string][] = [
- ['open_count', 'Open position'],
- ['closed_count', 'Closed position'],
- ['min_count', 'Minimum limit'],
- ['max_count', 'Maximum limit'],
-]
-function CalibrationPage({cal,hardware,onReading,refresh,action}:{
- cal:Calibration[],hardware:HardwareStatus|null,onReading:(reading:HardwareStatus)=>void,
- refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>
-}){
- const [draft,setDraft]=useState<Calibration[]>([])
- const [capturing,setCapturing]=useState<string|null>(null)
- useEffect(()=>setDraft(cal.map(c=>({...c}))),[cal])
- const change=(id:number,patch:Partial<Calibration>)=>setDraft(current=>current.map(c=>c.servo_id===id?{...c,...patch,verified:false,jog_limits_verified:'min_count' in patch||'max_count' in patch?false:c.jog_limits_verified}:c))
- const capture=async(id:number,key:CalibrationCountField,label:string)=>{
-  const captureId=`${id}-${key}`
-  setCapturing(captureId)
-  try{
-   await action(async()=>{
-    const reading=await api<HardwareStatus>('/hardware/status')
-    onReading(reading)
-    const servo=reading.servos.find(item=>item.id===id)
-    const position=servo?.position
-    if(!servo || typeof position!=='number' || !Number.isInteger(position) || position<0 || position>maxServoCount){
-     throw Error(reading.error || `No valid position reading from Servo ${id}. Check its connection and retry.`)
-    }
-    if(servo.moving!==false)throw Error(`Servo ${id} may be moving. Wait until it is still, then retry.`)
-    change(id,{[key]:position})
-    return position
-   },`Captured Servo ${id} ${label.toLowerCase()} in the unsaved form`)
-  }finally{setCapturing(null)}
- }
- const save=async(c:Calibration)=>{
-  const result=await action(()=>api(`/calibration/${c.servo_id}`,{method:'PUT',body:json(c)}),`Servo ${c.servo_id} calibration saved`)
-  if(result)await refresh()
- }
- return <>
-  <div className="rounded-2xl p-5 mb-5 bg-[#fff6df] border border-[#f0e3ba] text-[#7b652e] flex gap-3">
-   <ShieldCheck size={22} className="shrink-0"/>
-   <div className="text-sm leading-6"><b>Measure before verifying.</b> The app accepts raw counts from 0 to 4000. Direct-test limits and open/closed positions are checked separately. The starting values are placeholders. Capture reads the current position; it does not move a motor or save calibration.</div>
-  </div>
-  <div className="grid xl:grid-cols-2 gap-4">{draft.map(c=>{
-   const live=hardware?.servos.find(servo=>servo.id===c.servo_id)
-   return <div className="card p-5" key={c.servo_id}>
-    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id} · {servoMounts.find(mount=>mount.id===c.servo_id)?.location}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><div className="flex flex-wrap gap-1 justify-end"><Pill tone={c.jog_limits_verified?'green':'amber'}>{c.jog_limits_verified?'Test limits checked':'Test limits unverified'}</Pill><Pill tone={c.verified?'green':'gray'}>{c.verified?'Gestures calibrated':'Gestures uncalibrated'}</Pill></div></div>
-    <div className="rounded-xl border border-[#e8ece8] bg-[#f8faf7] px-4 py-3 mb-4 flex flex-wrap justify-between gap-2 text-sm"><span className="text-[#63796a]">Latest position reading</span><b className="text-[#1e4937]">{live?.position==null?'No reading':`${live.position} counts`}</b></div>
-    <div className="grid grid-cols-2 gap-3">{calibrationFields.map(([key,fingerLabel])=>{
-     const label=c.servo_id>=5 && key==='open_count'?'Position A':c.servo_id>=5 && key==='closed_count'?'Position B':fingerLabel
-     const inputId=`servo-${c.servo_id}-${key}`
-     return <div key={key} className="min-w-0"><label htmlFor={inputId} className="text-xs font-bold text-[#6b7f72]">{label}</label><input id={inputId} className="field mt-1" type="number" min="0" max={maxServoCount} value={c[key]} onChange={e=>change(c.servo_id,{[key]:Math.min(maxServoCount,Math.max(0,Number(e.target.value)))})}/><button type="button" className="text-xs font-bold text-teal mt-2 disabled:opacity-50" disabled={capturing!==null} onClick={()=>capture(c.servo_id,key,label)} aria-label={`Capture ${label.toLowerCase()} for Servo ${c.servo_id}`}>{capturing===`${c.servo_id}-${key}`?'Reading…':'Capture current position'}</button></div>
-    })}</div>
-    <div className="grid grid-cols-2 gap-3 mt-4"><label className="text-xs font-bold text-[#6b7f72]">Position direction<select className="field mt-1" value={c.direction} onChange={e=>change(c.servo_id,{direction:e.target.value as Calibration['direction']})}><option value="increasing">Counts increase</option><option value="decreasing">Counts decrease</option></select></label><label className="text-xs font-bold text-[#6b7f72]">Gesture speed cap (%)<input className="field mt-1" type="number" min="1" max="100" value={c.speed} onChange={e=>change(c.servo_id,{speed:Number(e.target.value)})}/></label></div>
-    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.jog_limits_verified||false} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,jog_limits_verified:e.target.checked}:x))} className="mt-1"/> I measured the minimum and maximum counts for a small direct test on this servo.</label>
-    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-3 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I also measured open and closed positions and direction for saved gestures.</label>
-    <button className="btn btn-primary mt-4 flex items-center gap-2" onClick={()=>save(c)}><Save size={15}/> Save calibration</button>
-   </div>
-  })}</div>
- </>
-}
-function Devices({status,hardware,scan,action,go}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>,go:(page:Page)=>void}){
+function Devices({status,hardware,scan,action}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>}){
  const [servoId,setServoId]=useState(1)
  const [delta,setDelta]=useState<10|-10>(10)
  const [preview,setPreview]=useState<JogPreview|null>(null)
@@ -276,7 +215,7 @@ function Devices({status,hardware,scan,action,go}:{status:Status,hardware:Hardwa
  return <div className="space-y-5">
   <div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#839187] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div>
   <div className="card p-5 max-w-[1040px]">
-   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; direct-test limits are recorded in Calibration.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
+   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; saved travel limits remain active.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
    {hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}
    {hardware?.port&&<p className="text-xs text-[#839187] mt-4">Controller: {hardware.port}</p>}
    <div className="grid md:grid-cols-2 gap-2 mt-4">{servoMounts.map(({id,location})=>{
@@ -294,7 +233,7 @@ function Devices({status,hardware,scan,action,go}:{status:Status,hardware:Hardwa
     <button className="btn btn-secondary" disabled={busy} onClick={check}>{busy?'Checking…':'Check move'}</button>
    </div>
    {preview&&<div className="rounded-xl border border-[#dce9df] bg-[#f8faf7] p-4 mt-4"><div className="text-sm font-bold">ID {preview.servo_id}: {preview.start} → {preview.target} counts</div><p className="text-xs text-[#63796a] mt-1">This is a {preview.delta>0?'+10':'−10'} count proposal. No command was sent.</p>
-    {preview.blocked_reason?<div className="text-sm text-[#976a20] mt-3">{preview.blocked_reason} <button className="font-bold underline" onClick={()=>go('Calibration')}>Open Calibration</button></div>:<div className="mt-4 space-y-3">
+    {preview.blocked_reason?<div className="text-sm text-[#976a20] mt-3">{preview.blocked_reason}</div>:<div className="mt-4 space-y-3">
      <p className="text-xs text-[#63796a]">This preview expires in 30 seconds. Keep the glove off your hand and use the independent power cutoff if movement is unexpected.</p>
      <label className="block text-xs"><input type="checkbox" checked={offBody} onChange={e=>setOffBody(e.target.checked)} className="mr-2"/>The glove is off my hand.</label>
      <label className="block text-xs"><input type="checkbox" checked={powerCut} onChange={e=>setPowerCut(e.target.checked)} className="mr-2"/>I tested the physical servo power cutoff for this session.</label>

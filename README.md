@@ -1,6 +1,6 @@
 # handoff — Phase 1
 
-A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
+A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
 
 ## Servo map
 
@@ -56,7 +56,7 @@ Manual Control has separate physical count controls and simulated percentage con
 
 Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros and percentage sliders remain simulation only.
 
-Calibration shows each servo's latest raw position. **Capture current position** makes a fresh read-only status check and copies that count into the chosen field in the unsaved form. It refuses a missing, invalid, or moving servo reading. Capture does not save the field or mark calibration verified. **Direct-test limits checked** records measured minimum/maximum counts for one small physical test; **Gestures calibrated** separately requires open/closed positions and direction. A direct-test check never makes macros eligible for hardware playback.
+The website does not expose a Calibration page. Existing measured servo limits remain stored in SQLite and are checked by live motor control. If limits need changing, update them through the local API after physically measuring the servo travel.
 
 ### Website hardware controls
 
@@ -102,7 +102,7 @@ The backend tests use a fake serial driver and send no USB writes. The frontend'
 ## Integration next steps
 
 1. Verify the builder-supplied finger assignments during supervised off-body calibration. The status check confirms IDs 1–6 respond, but cannot independently identify which finger each servo moves.
-2. With the glove off-body, establish each attached cord's direction and safe travel, then record measured limits in Calibration. Keep the independent servo power cutoff ready.
+2. With the glove off-body, establish each attached cord's direction and safe travel, then record measured limits through the local API. Keep the independent servo power cutoff ready.
 3. Test each channel's direction and response at the chosen manual speeds with the glove off-body. Test synchronized moves with two servos first while watching the power supply and cord paths. The current website does not physically play macros.
 4. Connect the glasses camera or object detector. Send real events to `POST /api/vision/detection` with `source: "external"`; add a reviewable object-to-macro mapping and user confirmation before allowing any resulting motion.
 
