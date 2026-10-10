@@ -11,6 +11,7 @@ type Status = {mode:string,positions:Record<number,number>,target:Record<number,
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
 type JogPreview = {servo_id:number,start:number,target:number,delta:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 type PositionPreview = {servo_id:number,start:number,target:number,speed:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
+type GroupPreview = {moves:{servo_id:number,start:number,target:number,speed:number}[],can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 type HardwareControlInfo = {writes_enabled:boolean,step_counts:number,position_speed_min:number,position_speed_max:number,position_speed_default:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
 const maxServoCount = 4000
@@ -85,10 +86,11 @@ function HardwareManual({status,hardware,cal,onReading,action,go}:{status:Status
  const [control,setControl]=useState<HardwareControlInfo|null>(null)
  const [targets,setTargets]=useState<Record<number,number>>({})
  const [speeds,setSpeeds]=useState<Record<number,number>>(()=>{try{return JSON.parse(localStorage.getItem('handoff-manual-speeds')||'{}')}catch{return {}}})
- const [preview,setPreview]=useState<PositionPreview|null>(null)
+ const [preview,setPreview]=useState<PositionPreview|GroupPreview|null>(null)
+ const [selected,setSelected]=useState<number[]>([])
  const [offBody,setOffBody]=useState(false),[powerCut,setPowerCut]=useState(false),[cordClear,setCordClear]=useState(false)
  const [busy,setBusy]=useState(false)
- const [monitoring,setMonitoring]=useState<{servoId:number,target:number,started:number,timeout:number}|null>(null)
+ const [monitoring,setMonitoring]=useState<{moves:{servoId:number,target:number}[],started:number,timeout:number}|null>(null)
  const [localError,setLocalError]=useState('')
  useEffect(()=>{api<HardwareControlInfo>('/hardware/control').then(setControl).catch(e=>setLocalError(String(e)))},[])
  useEffect(()=>{localStorage.setItem('handoff-manual-speeds',JSON.stringify(speeds))},[speeds])
@@ -102,9 +104,9 @@ function HardwareManual({status,hardware,cal,onReading,action,go}:{status:Status
     const reading=await api<HardwareStatus>('/hardware/status')
     if(cancelled)return
     onReading(reading)
-    const servo=reading.servos.find(item=>item.id===monitoring.servoId)
-    if(servo?.moving===false&&servo.position!=null&&Math.abs(servo.position-monitoring.target)<=20){setMonitoring(null);return}
-    if(Date.now()-monitoring.started>monitoring.timeout){setLocalError(`Servo ${monitoring.servoId} has not reported reaching ${monitoring.target}. Use Stop or the physical power cutoff if motion continues.`);setMonitoring(null)}
+    const allSettled=monitoring.moves.every(move=>{const servo=reading.servos.find(item=>item.id===move.servoId);return servo?.moving===false&&servo.position!=null&&Math.abs(servo.position-move.target)<=20})
+    if(allSettled){setMonitoring(null);return}
+    if(Date.now()-monitoring.started>monitoring.timeout){setLocalError(`Selected servos have not all reported reaching their targets. Use Stop or the physical power cutoff if motion continues.`);setMonitoring(null)}
    }catch(e){if(!cancelled)setLocalError(e instanceof Error?e.message:String(e))}
   },1200)
   return()=>{cancelled=true;window.clearInterval(timer)}
@@ -118,16 +120,29 @@ function HardwareManual({status,hardware,cal,onReading,action,go}:{status:Status
   setBusy(true);setPreview(null);setLocalError('')
   try{const result=await action(()=>api<PositionPreview>('/hardware/position/preview',{method:'POST',body:json({servo_id:id,target,speed})}));if(result)setPreview(result)}finally{setBusy(false)}
  }
+ const checkGroup=async()=>{
+  if(selected.length<2){setLocalError('Select at least two servos for a group move.');return}
+  const moves=selected.map(id=>({servo_id:id,target:targets[id],speed:speeds[id]??control?.position_speed_default??500}))
+  for(const move of moves){const c=cal.find(item=>item.servo_id===move.servo_id);if(!c?.jog_limits_verified||!Number.isInteger(move.target)||move.target<c.min_count||move.target>c.max_count){setLocalError(`Servo ${move.servo_id} needs a target inside its confirmed limits.`);return}}
+  setBusy(true);setPreview(null);setLocalError('')
+  try{const result=await action(()=>api<GroupPreview>('/hardware/group/preview',{method:'POST',body:json({moves})}));if(result)setPreview(result)}finally{setBusy(false)}
+ }
  const send=async()=>{
   if(!preview?.token||!preview.phrase)return
   setBusy(true);setLocalError('')
   try{
-   const result=await action(()=>api<{accepted:boolean,servo_id:number,target:number,speed:number}>('/hardware/position/execute',{method:'POST',body:json({token:preview.token,phrase:preview.phrase,off_body:offBody,power_cut_tested:powerCut,cord_path_clear:cordClear})}),`Servo ${preview.servo_id} moving toward ${preview.target} at speed ${preview.speed}.`)
-   if(result){setMonitoring({servoId:result.servo_id,target:result.target,started:Date.now(),timeout:Math.max(12000,Math.abs(preview.target-preview.start)/preview.speed*3000+10000)});setPreview(null);setOffBody(false);setCordClear(false)}
+   const body=json({token:preview.token,phrase:preview.phrase,off_body:offBody,power_cut_tested:powerCut,cord_path_clear:cordClear})
+   if('moves' in preview){
+    const result=await action(()=>api<{accepted:boolean,moves:{servo_id:number,target:number,speed:number}[]}>('/hardware/group/execute',{method:'POST',body}),'Synchronized group command sent. Watch all selected servos.')
+    if(result){setMonitoring({moves:result.moves.map(move=>({servoId:move.servo_id,target:move.target})),started:Date.now(),timeout:20000});setPreview(null);setOffBody(false);setCordClear(false)}
+   }else{
+    const result=await action(()=>api<{accepted:boolean,servo_id:number,target:number,speed:number}>('/hardware/position/execute',{method:'POST',body}),`Servo ${preview.servo_id} moving toward ${preview.target} at speed ${preview.speed}.`)
+    if(result){setMonitoring({moves:[{servoId:result.servo_id,target:result.target}],started:Date.now(),timeout:Math.max(12000,Math.abs(preview.target-preview.start)/preview.speed*3000+10000)});setPreview(null);setOffBody(false);setCordClear(false)}
+   }
   }finally{setBusy(false)}
  }
  return <section className="card p-5 md:p-7 mb-5">
-  <div className="flex flex-wrap items-start justify-between gap-3"><div><Eyebrow>Physical glove</Eyebrow><h2 className="text-xl font-bold mt-1">Servo positions</h2><p className="text-sm text-[#63796a] mt-2 max-w-2xl">Choose a count and speed for one servo, then check and confirm the move. Sliders only set a target; they do not move the glove by themselves.</p></div><Pill tone={control?.writes_enabled?'green':'amber'}>{control?.writes_enabled?'Motor control ready':'Motor control locked'}</Pill></div>
+  <div className="flex flex-wrap items-start justify-between gap-3"><div><Eyebrow>Physical glove</Eyebrow><h2 className="text-xl font-bold mt-1">Servo positions</h2><p className="text-sm text-[#63796a] mt-2 max-w-2xl">Set each target and speed. Check one servo or select several to move together. Sliders only set targets until you confirm.</p></div><Pill tone={control?.writes_enabled?'green':'amber'}>{control?.writes_enabled?'Motor control ready':'Motor control locked'}</Pill></div>
   {!control?.writes_enabled&&<p className="text-xs text-[#976a20] mt-4">The local API is running with physical writes disabled. Start it in hardware control mode to use these buttons.</p>}
   {localError&&<div role="alert" className="message message-error mt-4">{localError}<button onClick={()=>setLocalError('')} aria-label="Dismiss warning"><X size={16}/></button></div>}
   <div className="grid lg:grid-cols-2 gap-3 mt-6">{servos.map((name,index)=>{
@@ -136,22 +151,24 @@ function HardwareManual({status,hardware,cal,onReading,action,go}:{status:Status
    const valid=Number.isInteger(target)&&target>=minimum&&target<=maximum
    return <div key={id} className="rounded-xl border border-[#e5ebe5] p-4 bg-[#fcfdfc]">
     <div className="flex justify-between gap-2 items-start"><div><div className="text-[10px] font-extrabold tracking-[.13em] text-[#8d9d90]">SERVO 0{id} · {servoMounts.find(m=>m.id===id)?.location.toUpperCase()}</div><h3 className="font-bold text-base mt-1 mb-0">{name}</h3></div><span className="text-xs text-[#607669] text-right">Now <b>{live?.position??'—'}</b><br/>{live?.moving?'Moving':'Stopped'}</span></div>
+    <label className="inline-flex items-center gap-2 text-xs font-semibold text-[#526b5a] mt-3"><input type="checkbox" checked={selected.includes(id)} onChange={e=>{setSelected(current=>e.target.checked?[...current,id].sort((a,b)=>a-b):current.filter(value=>value!==id));setPreview(null)}}/>Include in group move</label>
     <div className="grid grid-cols-[1fr_100px] gap-3 items-end mt-5"><label className="text-xs font-bold text-[#6b7f72]">Target count<input aria-label={`${name} target count slider`} type="range" min={minimum} max={maximum} value={Math.max(minimum,Math.min(maximum,target))} onChange={e=>updateTarget(id,Number(e.target.value))} className="w-full mt-3" disabled={!c}/></label><input aria-label={`${name} target count`} className="field" type="number" min={minimum} max={maximum} step="1" value={target} onChange={e=>updateTarget(id,Number(e.target.value))}/></div>
     <div className="flex justify-between text-[10px] text-[#94a39a] mt-1"><span>{minimum} min</span><span>{maximum} max</span></div>
-    <div className="grid grid-cols-[1fr_65px] gap-3 items-center mt-4"><label className="text-xs font-bold text-[#6b7f72]">Speed · {speed} counts/s<input aria-label={`${name} speed`} type="range" min={control?.position_speed_min??50} max={control?.position_speed_max??500} step="25" value={speed} onChange={e=>updateSpeed(id,Number(e.target.value))} className="w-full mt-2"/></label><span className="text-right text-[10px] text-[#87978a]">50–500</span></div>
+    <div className="grid grid-cols-[1fr_70px] gap-3 items-center mt-4"><label className="text-xs font-bold text-[#6b7f72]">Speed · {speed} counts/s<input aria-label={`${name} speed`} type="range" min={control?.position_speed_min??50} max={control?.position_speed_max??2400} step="25" value={speed} onChange={e=>updateSpeed(id,Number(e.target.value))} className="w-full mt-2"/></label><span className="text-right text-[10px] text-[#87978a]">50–{control?.position_speed_max??2400}</span></div>
     <div className="flex flex-wrap items-center gap-2 mt-4"><button className="btn btn-primary" disabled={busy||!!monitoring||!control?.writes_enabled||status.stopped||!hardware?.connected||!c?.jog_limits_verified||!valid||live?.moving!==false} onClick={()=>check(id)}>Check move</button><button className="btn btn-secondary" disabled={live?.position==null} onClick={()=>updateTarget(id,live!.position!)}>Use current</button>{!c?.jog_limits_verified&&<button className="text-xs font-bold text-[#976a20] underline" onClick={()=>go('Calibration')}>Verify limits</button>}</div>
    </div>
   })}</div>
-  {monitoring&&<div role="status" className="rounded-xl bg-[#edf5ec] text-[#446947] text-sm p-4 mt-4">Servo {monitoring.servoId} is moving toward {monitoring.target}. Its position refreshes here. Use Stop or the physical power cutoff if anything catches.</div>}
-  {preview&&<div className="rounded-xl border border-[#dce9df] bg-[#f8faf7] p-5 mt-5"><div className="text-sm font-bold">Servo {preview.servo_id}: {preview.start} → {preview.target} counts at {preview.speed} counts/s</div><p className="text-xs text-[#63796a] mt-1">No command has been sent. This confirmation expires in 30 seconds. The servo will not return automatically.</p>
+  <div className="flex flex-wrap items-center gap-3 mt-5"><button className="btn btn-primary" disabled={busy||!!monitoring||selected.length<2||!control?.writes_enabled||status.stopped||!hardware?.connected} onClick={checkGroup}>Check group move ({selected.length})</button><span className="text-xs text-[#839187]">Selected servos receive one synchronized command after confirmation.</span></div>
+  {monitoring&&<div role="status" className="rounded-xl bg-[#edf5ec] text-[#446947] text-sm p-4 mt-4">Watching servos {monitoring.moves.map(move=>move.servoId).join(', ')} reach their targets. Use Stop or the physical power cutoff if anything catches.</div>}
+  {preview&&<div className="rounded-xl border border-[#dce9df] bg-[#f8faf7] p-5 mt-5"><div className="text-sm font-bold">{'moves' in preview?`Move ${preview.moves.length} servos together`:`Servo ${preview.servo_id}: ${preview.start} → ${preview.target} counts at ${preview.speed} counts/s`}</div>{'moves' in preview&&<ul className="text-xs text-[#526b5a] mt-2 space-y-1">{preview.moves.map(move=><li key={move.servo_id}>Servo {move.servo_id}: {move.start} → {move.target} at {move.speed} counts/s</li>)}</ul>}<p className="text-xs text-[#63796a] mt-1">No command has been sent. This confirmation expires in 30 seconds. The servos will not return automatically.</p>
    {preview.blocked_reason?<p className="text-sm text-[#976a20] mt-3">{preview.blocked_reason}</p>:<div className="space-y-3 mt-4">
     <label className="block text-xs"><input type="checkbox" checked={offBody} onChange={e=>setOffBody(e.target.checked)} className="mr-2"/>The glove is off my hand.</label>
     <label className="block text-xs"><input type="checkbox" checked={powerCut} onChange={e=>setPowerCut(e.target.checked)} className="mr-2"/>I tested the physical servo power cutoff for this session and can reach it.</label>
     <label className="block text-xs"><input type="checkbox" checked={cordClear} onChange={e=>setCordClear(e.target.checked)} className="mr-2"/>The cord path is clear and this target stays within measured travel.</label>
-    <div className="flex gap-2"><button className="btn btn-primary" disabled={busy||status.stopped||!offBody||!powerCut||!cordClear} onClick={send}>Confirm move</button><button className="btn btn-secondary" onClick={()=>setPreview(null)}>Cancel</button></div>
+    <div className="flex gap-2"><button className="btn btn-primary" disabled={busy||status.stopped||!offBody||!powerCut||!cordClear} onClick={send}>{'moves' in preview?'Confirm group move':'Confirm move'}</button><button className="btn btn-secondary" onClick={()=>setPreview(null)}>Cancel</button></div>
    </div>}
   </div>}
-  <p className="text-xs text-[#839187] mt-5">Only one servo moves at a time. Saved gestures and the percentage sliders below still use simulation. Stop attempts to turn off servo torque; the physical power switch is the reliable cutoff.</p>
+  <p className="text-xs text-[#839187] mt-5">Saved gestures and the percentage sliders below still use simulation. Stop attempts to turn off servo torque; the physical power switch is the reliable cutoff.</p>
  </section>
 }
 function Manual({status,hardware,cal,onReading,action,manual,setManual,apply,go}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void,action:ManualAction,manual:Record<number,number>,setManual:(p:Record<number,number>)=>void,apply:()=>void,go:(p:Page)=>void}){

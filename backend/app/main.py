@@ -247,7 +247,11 @@ class JogConfirmInput(BaseModel):
 class PositionPreviewInput(BaseModel):
     servo_id: int = Field(ge=1, le=6)
     target: int = Field(ge=0, le=MAX_SERVO_COUNT)
-    speed: int = Field(ge=50, le=500)
+    speed: int = Field(ge=50, le=2400)
+
+
+class GroupPreviewInput(BaseModel):
+    moves: list[PositionPreviewInput] = Field(min_length=2, max_length=6)
 
 
 def _local_hardware_request(request: Request) -> None:
@@ -348,6 +352,54 @@ def execute_hardware_position(payload: JogConfirmInput, request: Request):
                                 cord_path_clear=payload.cord_path_clear,
                                 calibration=calibration, stopped=sim.stopped,
                                 is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/group/preview")
+def preview_hardware_group(payload: GroupPreviewInput, request: Request):
+    from .hardware_control import HardwareControlError, prepare_group
+
+    _local_hardware_request(request)
+    ids = [move.servo_id for move in payload.moves]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "Each servo can appear only once in a group move.")
+    with db() as conn:
+        rows = {row["servo_id"]: row["data"] for row in conn.execute(
+            f"SELECT servo_id, data FROM calibration WHERE servo_id IN ({','.join('?' for _ in ids)})", ids
+        )}
+    if set(rows) != set(ids):
+        raise HTTPException(409, "Calibration is unavailable for a selected servo.")
+    calibrations = {servo_id: CalibrationInput.model_validate_json(rows[servo_id]) for servo_id in ids}
+    try:
+        return prepare_group([(move.servo_id, move.target, move.speed) for move in payload.moves],
+                             calibrations, sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/group/execute")
+def execute_hardware_group(payload: JogConfirmInput, request: Request):
+    from .hardware_control import HardwareControlError, execute_group, pending_group_servo_ids
+
+    _local_hardware_request(request)
+    ids = pending_group_servo_ids(payload.token)
+    if ids is None:
+        raise HTTPException(409, "Move preview expired. Check the group move again.")
+    with db() as conn:
+        rows = {row["servo_id"]: row["data"] for row in conn.execute(
+            f"SELECT servo_id, data FROM calibration WHERE servo_id IN ({','.join('?' for _ in ids)})", ids
+        )}
+    if set(rows) != set(ids):
+        raise HTTPException(409, "Calibration is unavailable for a selected servo.")
+    calibrations = {servo_id: CalibrationInput.model_validate_json(rows[servo_id]) for servo_id in ids}
+    try:
+        return execute_group(payload.token, payload.phrase,
+                             off_body=payload.off_body,
+                             power_cut_tested=payload.power_cut_tested,
+                             cord_path_clear=payload.cord_path_clear,
+                             calibrations=calibrations, stopped=sim.stopped,
+                             is_stopped=lambda: sim.stopped)
     except HardwareControlError as exc:
         raise HTTPException(409, str(exc)) from exc
 

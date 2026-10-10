@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import hardware_control as control
 from app.hardware_boundary import ActuationApproval, gated_jog_count, gated_target_count
+from app import main as main_module
 from app.main import CalibrationInput, app
 
 
@@ -20,6 +21,8 @@ class FakeDriver:
     def __init__(self):
         self.packetHandler = self
         self.porthandler = type("Port", (), {"is_open": False})()
+        self.groupSyncWrite = self
+        self.queued = []
 
     def openSerialPort(self, port, baudrate, servoFamily):
         self.calls.append(("open", port))
@@ -41,6 +44,18 @@ class FakeDriver:
     def WritePosEx(self, servo_id, target, speed, acceleration):
         self.calls.append(("move", servo_id, target, speed, acceleration))
         return 0, 0
+
+    def clearParam(self):
+        self.queued = []
+
+    def SyncWritePosEx(self, servo_id, target, speed, acceleration):
+        self.queued.append((servo_id, target, speed, acceleration))
+        self.calls.append(("queue", servo_id, target, speed, acceleration))
+        return True
+
+    def txPacket(self):
+        self.calls.append(("sync_packet", tuple(self.queued)))
+        return 0
 
     def writeReg(self, servo_id, address, value):
         self.calls.append(("write", servo_id, address, value))
@@ -187,7 +202,7 @@ def test_position_command_is_single_use_and_speed_is_passed_to_driver(fake_contr
                                       power_cut_tested=True, cord_path_clear=True,
                                       calibration=calibration, stopped=False)
     assert result["accepted"] is True
-    assert [call for call in fake_controller if call[0] == "move"] == [("move", 1, 3500, 400, 5)]
+    assert [call for call in fake_controller if call[0] == "move"] == [("move", 1, 3500, 400, 50)]
     with pytest.raises(control.HardwareControlError, match="expired"):
         control.execute_position(preview["token"], preview["phrase"], off_body=True,
                                  power_cut_tested=True, cord_path_clear=True,
@@ -211,7 +226,7 @@ def test_position_move_rechecks_calibration_stop_and_target(fake_controller, mon
                                  calibration=calibration, stopped=False, is_stopped=lambda: True)
     assert not any(call[0] == "move" for call in fake_controller)
     with pytest.raises(control.HardwareControlError, match="speed"):
-        control.prepare_position(1, 1050, 501, calibration, False)
+        control.prepare_position(1, 1050, 2401, calibration, False)
     approval = ActuationApproval(True, True)
     assert gated_target_count(1000, 1050, calibration, approval, False) == 1050
     with pytest.raises(PermissionError):
@@ -223,7 +238,67 @@ def test_position_route_rejects_nonlocal_and_invalid_speed(fake_controller, monk
     with TestClient(app) as client:
         foreign = client.post("/api/hardware/position/preview", json={"servo_id": 1, "target": 3500, "speed": 250},
                               headers={"Origin": "https://other.example"})
-        invalid = client.post("/api/hardware/position/preview", json={"servo_id": 1, "target": 3500, "speed": 900})
+        invalid = client.post("/api/hardware/position/preview", json={"servo_id": 1, "target": 3500, "speed": 2401})
     assert foreign.status_code == 403
     assert invalid.status_code == 422
     assert not any(call[0] == "move" for call in fake_controller)
+
+
+def test_group_move_sends_one_packet_after_all_checks(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibration = measured_calibration()
+    moves = [(1, 1050, 2400), (2, 1060, 1200)]
+    calibrations = {1: calibration, 2: calibration}
+    preview = control.prepare_group(moves, calibrations, False)
+    assert preview["can_execute"] is True
+    assert not any(call[0] in ("queue", "sync_packet") for call in fake_controller)
+    result = control.execute_group(preview["token"], preview["phrase"], off_body=True,
+                                   power_cut_tested=True, cord_path_clear=True,
+                                   calibrations=calibrations, stopped=False)
+    assert result["accepted"] is True
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", ((1, 1050, 2400, 50), (2, 1060, 1200, 50)))
+    ]
+    assert not any(call[0] == "move" for call in fake_controller)
+    with pytest.raises(control.HardwareControlError, match="expired"):
+        control.execute_group(preview["token"], preview["phrase"], off_body=True,
+                              power_cut_tested=True, cord_path_clear=True,
+                              calibrations=calibrations, stopped=False)
+
+
+def test_group_move_aborts_without_any_packet_on_changed_calibration_or_stop(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibration = measured_calibration()
+    moves = [(1, 1050, 2400), (2, 1060, 1200)]
+    calibrations = {1: calibration, 2: calibration}
+    preview = control.prepare_group(moves, calibrations, False)
+    changed = {1: calibration, 2: calibration.model_copy(update={"max_count": 1200})}
+    with pytest.raises(control.HardwareControlError, match="Calibration changed"):
+        control.execute_group(preview["token"], preview["phrase"], off_body=True,
+                              power_cut_tested=True, cord_path_clear=True,
+                              calibrations=changed, stopped=False)
+    preview = control.prepare_group(moves, calibrations, False)
+    with pytest.raises(control.HardwareControlError, match="stop was pressed"):
+        control.execute_group(preview["token"], preview["phrase"], off_body=True,
+                              power_cut_tested=True, cord_path_clear=True,
+                              calibrations=calibrations, stopped=False, is_stopped=lambda: True)
+    assert not any(call[0] in ("queue", "sync_packet") for call in fake_controller)
+
+
+def test_group_api_previews_then_sends_one_packet(fake_controller, monkeypatch, tmp_path):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "group.sqlite3")
+    with TestClient(app) as client:
+        for servo_id in (1, 2):
+            saved = measured_calibration().model_dump()
+            assert client.put(f"/api/calibration/{servo_id}", json=saved).status_code == 200
+        payload = {"moves": [{"servo_id": 1, "target": 1050, "speed": 2400},
+                             {"servo_id": 2, "target": 1060, "speed": 1200}]}
+        preview = client.post("/api/hardware/group/preview", json=payload)
+        assert preview.status_code == 200 and preview.json()["can_execute"] is True
+        assert not any(call[0] == "sync_packet" for call in fake_controller)
+        confirmation = {"token": preview.json()["token"], "phrase": preview.json()["phrase"],
+                        "off_body": True, "power_cut_tested": True, "cord_path_clear": True}
+        sent = client.post("/api/hardware/group/execute", json=confirmation)
+        assert sent.status_code == 200 and sent.json()["accepted"] is True
+    assert len([call for call in fake_controller if call[0] == "sync_packet"]) == 1
