@@ -46,7 +46,7 @@ function App(){
     {page==='Manual Control'&&<Manual status={status} manual={manual} setManual={setManual} apply={applyManual} go={navigate}/>}
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={manual}/>}
     {page==='AI Vision'&&<Vision/>}
-    {page==='Calibration'&&<CalibrationPage cal={cal} refresh={refresh} action={action}/>}
+    {page==='Calibration'&&<CalibrationPage cal={cal} hardware={hardware} onReading={setHardware} refresh={refresh} action={action}/>}
     {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware}/>}
    </main>
   </div>
@@ -106,7 +106,65 @@ function Vision(){
  }
  return <div className="vision-preview"><div className="card p-5 md:p-6"><div className="flex justify-between items-start mb-4"><div><Eyebrow>Camera input</Eyebrow><h2 className="text-xl font-bold mt-1">Live preview</h2></div><Pill tone={camera?'green':'gray'}>{camera?'Browser camera':'Camera off'}</Pill></div><div className="aspect-video rounded-2xl bg-[#172d29] grid place-items-center overflow-hidden relative"><video ref={video} autoPlay playsInline muted className={`w-full h-full object-cover ${camera?'':'hidden'}`}/>{!camera&&<div className="text-center text-[#97b7a9]"><Camera className="mx-auto mb-3" size={36}/><div className="font-bold">No camera preview</div><div className="text-xs mt-1">Connect a browser camera to view its feed</div></div>}<span className="absolute left-4 bottom-4 rounded-full bg-[#152d29]/80 text-white text-[10px] px-3 py-1.5 font-bold">NO OBJECT DETECTOR RUNNING</span></div>{cameraError&&<p className="text-red-600 text-xs mt-2">{cameraError}</p>}<button className="btn btn-primary mt-4" onClick={toggle}>{camera?'Stop preview':'Start camera preview'}</button><p className="text-xs text-[#849087] mt-3">Camera video stays in this browser. The preview does not analyze frames or identify objects.</p></div></div>
 }
-function CalibrationPage({cal,refresh,action}:{cal:Calibration[],refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>}){const [draft,setDraft]=useState<Calibration[]>([]);useEffect(()=>setDraft(cal.map(c=>({...c}))),[cal]);const change=(id:number,patch:Partial<Calibration>)=>setDraft(draft.map(c=>c.servo_id===id?{...c,...patch,verified:false}:c));const save=async(c:Calibration)=>{const result=await action(()=>api(`/calibration/${c.servo_id}`,{method:'PUT',body:json(c)}),`Servo ${c.servo_id} calibration saved`);if(result)await refresh()};return <><div className="rounded-2xl p-5 mb-5 bg-[#fff6df] border border-[#f0e3ba] text-[#7b652e] flex gap-3"><ShieldCheck size={22} className="shrink-0"/><div className="text-sm leading-6"><b>Measured values only.</b> The numbers below are unverified placeholders for interface testing. Calibrate each servo unloaded, check direction and mechanical limits, and test the physical E-stop before a future hardware adapter is enabled.</div></div><div className="grid xl:grid-cols-2 gap-4">{draft.map(c=><div className="card p-5" key={c.servo_id}><div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><Pill tone={c.verified?'green':'amber'}>{c.verified?'Verified':'Unverified'}</Pill></div><div className="grid grid-cols-2 gap-3">{([['open_count','Open count'],['closed_count','Closed count'],['min_count','Minimum'],['max_count','Maximum']] as const).map(([key,label])=><label key={key} className="text-xs font-bold text-[#6b7f72]">{label}<input className="field mt-1" type="number" min="0" max="4095" value={c[key]} onChange={e=>change(c.servo_id,{[key]:Number(e.target.value)})}/></label>)}</div><div className="grid grid-cols-2 gap-3 mt-3"><label className="text-xs font-bold text-[#6b7f72]">Curl direction<select className="field mt-1" value={c.direction} onChange={e=>change(c.servo_id,{direction:e.target.value as Calibration['direction']})}><option value="increasing">Counts increase</option><option value="decreasing">Counts decrease</option></select></label><label className="text-xs font-bold text-[#6b7f72]">Speed cap (%)<input className="field mt-1" type="number" min="1" max="100" value={c.speed} onChange={e=>change(c.servo_id,{speed:Number(e.target.value)})}/></label></div><label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(draft.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I measured these values on this servo and checked that travel is safe.</label><button className="btn btn-primary mt-4 flex items-center gap-2" onClick={()=>save(c)}><Save size={15}/> Save calibration</button></div>)}</div></>}
+type CalibrationCountField = 'open_count' | 'closed_count' | 'min_count' | 'max_count'
+const calibrationFields: [CalibrationCountField, string][] = [
+ ['open_count', 'Open position'],
+ ['closed_count', 'Closed position'],
+ ['min_count', 'Minimum limit'],
+ ['max_count', 'Maximum limit'],
+]
+function CalibrationPage({cal,hardware,onReading,refresh,action}:{
+ cal:Calibration[],hardware:HardwareStatus|null,onReading:(reading:HardwareStatus)=>void,
+ refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>
+}){
+ const [draft,setDraft]=useState<Calibration[]>([])
+ const [capturing,setCapturing]=useState<string|null>(null)
+ useEffect(()=>setDraft(cal.map(c=>({...c}))),[cal])
+ const change=(id:number,patch:Partial<Calibration>)=>setDraft(current=>current.map(c=>c.servo_id===id?{...c,...patch,verified:false}:c))
+ const capture=async(id:number,key:CalibrationCountField,label:string)=>{
+  const captureId=`${id}-${key}`
+  setCapturing(captureId)
+  try{
+   await action(async()=>{
+    const reading=await api<HardwareStatus>('/hardware/status')
+    onReading(reading)
+    const servo=reading.servos.find(item=>item.id===id)
+    const position=servo?.position
+    if(!servo || typeof position!=='number' || !Number.isInteger(position) || position<0 || position>4095){
+     throw Error(reading.error || `No valid position reading from Servo ${id}. Check its connection and retry.`)
+    }
+    if(servo.moving!==false)throw Error(`Servo ${id} may be moving. Wait until it is still, then retry.`)
+    change(id,{[key]:position})
+    return position
+   },`Captured Servo ${id} ${label.toLowerCase()} in the unsaved form`)
+  }finally{setCapturing(null)}
+ }
+ const save=async(c:Calibration)=>{
+  const result=await action(()=>api(`/calibration/${c.servo_id}`,{method:'PUT',body:json(c)}),`Servo ${c.servo_id} calibration saved`)
+  if(result)await refresh()
+ }
+ return <>
+  <div className="rounded-2xl p-5 mb-5 bg-[#fff6df] border border-[#f0e3ba] text-[#7b652e] flex gap-3">
+   <ShieldCheck size={22} className="shrink-0"/>
+   <div className="text-sm leading-6"><b>Measure before verifying.</b> The saved starting values are placeholders. Capture only reads the current servo position into this form; it does not move a motor or save calibration. Work off-body, do not force a powered servo, and check travel limits and an independent power stop before future physical control.</div>
+  </div>
+  <div className="grid xl:grid-cols-2 gap-4">{draft.map(c=>{
+   const live=hardware?.servos.find(servo=>servo.id===c.servo_id)
+   return <div className="card p-5" key={c.servo_id}>
+    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><Pill tone={c.verified?'green':'amber'}>{c.verified?'Verified':'Unverified'}</Pill></div>
+    <div className="rounded-xl border border-[#e8ece8] bg-[#f8faf7] px-4 py-3 mb-4 flex flex-wrap justify-between gap-2 text-sm"><span className="text-[#63796a]">Latest position reading</span><b className="text-[#1e4937]">{live?.position==null?'No reading':`${live.position} counts`}</b></div>
+    <div className="grid grid-cols-2 gap-3">{calibrationFields.map(([key,fingerLabel])=>{
+     const label=c.servo_id>=5 && key==='open_count'?'Position A':c.servo_id>=5 && key==='closed_count'?'Position B':fingerLabel
+     const inputId=`servo-${c.servo_id}-${key}`
+     return <div key={key} className="min-w-0"><label htmlFor={inputId} className="text-xs font-bold text-[#6b7f72]">{label}</label><input id={inputId} className="field mt-1" type="number" min="0" max="4095" value={c[key]} onChange={e=>change(c.servo_id,{[key]:Number(e.target.value)})}/><button type="button" className="text-xs font-bold text-teal mt-2 disabled:opacity-50" disabled={capturing!==null} onClick={()=>capture(c.servo_id,key,label)} aria-label={`Capture ${label.toLowerCase()} for Servo ${c.servo_id}`}>{capturing===`${c.servo_id}-${key}`?'Reading…':'Capture current position'}</button></div>
+    })}</div>
+    <div className="grid grid-cols-2 gap-3 mt-4"><label className="text-xs font-bold text-[#6b7f72]">Position direction<select className="field mt-1" value={c.direction} onChange={e=>change(c.servo_id,{direction:e.target.value as Calibration['direction']})}><option value="increasing">Counts increase</option><option value="decreasing">Counts decrease</option></select></label><label className="text-xs font-bold text-[#6b7f72]">Speed cap (%)<input className="field mt-1" type="number" min="1" max="100" value={c.speed} onChange={e=>change(c.servo_id,{speed:Number(e.target.value)})}/></label></div>
+    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I measured these positions and limits on this servo and checked that travel is safe.</label>
+    <button className="btn btn-primary mt-4 flex items-center gap-2" onClick={()=>save(c)}><Save size={15}/> Save calibration</button>
+   </div>
+  })}</div>
+ </>
+}
 function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'
  const items=[

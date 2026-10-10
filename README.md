@@ -54,6 +54,8 @@ Manual Control changes a draft until **Apply to simulation** is pressed. The AI 
 
 Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page shows each servo's raw readings and has a refresh button; it also refreshes automatically every 20 seconds. This status check never sends a position command. Manual controls and macros still move only the simulation.
 
+Calibration shows each servo's latest raw position. **Capture current position** makes a fresh read-only status check and copies that count into the chosen field in the unsaved form. It refuses a missing, invalid, or moving servo reading. Capture does not save the field or mark calibration verified. Only check verification after independently measuring the positions, direction, and mechanical limits off-body, then use **Save calibration**.
+
 The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and common Feetech URT-1 adapters (`1A86:7523`). If there are multiple compatible adapters, set `HANDOFF_SERVO_PORT=/dev/cu.YOUR_PORT` before starting the API. The supplied [Feetech-tuna library](https://github.com/iotdesignshop/Feetech-tuna) is included under `backend/feetech_tuna` at commit `50eb1308f9ed490646f39dc58d7ff04c9f4d8eed`, with its [MIT license](backend/third_party_licenses/Feetech-tuna.LICENSE). `pyserial` is installed from `backend/requirements.txt`.
 
 ## Safety boundary
