@@ -10,3 +10,4 @@ backend/.pytest_cache/
 backend/tests/test.sqlite3
 frontend/*.tsbuildinfo
 .DS_Store
+backend/.env

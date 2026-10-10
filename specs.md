@@ -703,7 +703,7 @@ Ordered phases. Status labels: **[Implemented]**, **[Proposed]**, **[Required be
 ### Phase 1 — Simulation studio [Implemented]
 
 Six-channel simulation with interpolation; macro CRUD with export/import; SQLite persistence; software stop latch; WebSocket telemetry; six views (Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices); read-only servo status; `ServoTransport` contract and `gated_counts()` defined but unwired for movement.
-
+c
 ### Phase 2 — Persistence migration and simulation hardening [Proposed]
 
 1. Verify Supabase prerequisites (§3.5): CLI auth, Resume Fit project reference, existing schema and policies.

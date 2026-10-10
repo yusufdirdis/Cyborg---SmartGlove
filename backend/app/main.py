@@ -4,16 +4,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from . import assistant
 
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
 MAX_SERVO_COUNT = 4000  # User-requested app cap; not a measured mechanical limit.
@@ -423,20 +427,29 @@ async def control_pose(pose: Pose):
     return {"accepted": True, "mode": "simulation"}
 
 
+async def latch_stop() -> dict:
+    """The one full stop path: simulation latch, best-effort torque-off, no pending proposals."""
+    from .hardware_control import disable_torque
+
+    await sim.stop()
+    assistant.clear_proposals()
+    hardware_stop = await asyncio.to_thread(disable_torque)
+    return {**sim.snapshot(), "hardware_stop": hardware_stop}
+
+
 @app.post("/api/control/stop")
 async def stop(request: Request):
-    from .hardware_control import disable_torque, writes_enabled
+    from .hardware_control import writes_enabled
 
     if writes_enabled():
         _local_hardware_request(request)
-    await sim.stop()
-    hardware_stop = await asyncio.to_thread(disable_torque)
-    return {**sim.snapshot(), "hardware_stop": hardware_stop}
+    return await latch_stop()
 
 
 @app.post("/api/control/reset")
 async def reset():
     await sim.reset()
+    assistant.clear_proposals()
     return sim.snapshot()
 
 
@@ -467,6 +480,161 @@ async def vision_detection(payload: Detection):
     sim.last_event = "Detection event received; no macro was triggered"
     await sim.broadcast()
     return {"received": True, "action": "none"}
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    text: str = Field(max_length=2000)
+
+
+class ChatInput(BaseModel):
+    provider: str
+    message: str = Field(min_length=1, max_length=500)
+    history: list[ChatTurn] = Field(default_factory=list, max_length=10)
+
+
+@app.get("/api/assistant/providers")
+def assistant_providers():
+    return assistant.provider_list()
+
+
+@app.post("/api/assistant/chat")
+async def assistant_chat(payload: ChatInput, request: Request):
+    """Drafts proposals only. A stop request is the single action taken directly."""
+    from .hardware_control import writes_enabled
+
+    if writes_enabled():
+        _local_hardware_request(request)
+    if payload.provider not in assistant.PROVIDERS:
+        raise HTTPException(404, "Unknown assistant provider")
+    saved = [{"id": m["id"], "name": m["name"]} for m in macros()]
+    reply, command = await assistant.ask(payload.provider, payload.message, [t.model_dump() for t in payload.history], SERVO_NAMES, saved)
+    response = {"provider": payload.provider, "reply": reply, "proposal": None, "stopped": False}
+    if command and command.type == "stop":
+        response.update(stopped=True, hardware_stop=(await latch_stop())["hardware_stop"])
+    elif command and sim.stopped:
+        response["reply"] = f"{reply} Software stop is latched, so nothing was proposed. Reset first."
+    elif command:
+        response["proposal"] = assistant.create_proposal(command, payload.provider)
+    return response
+
+
+@app.post("/api/assistant/transcribe")
+async def assistant_transcribe(request: Request):
+    """Raw audio body in, transcript out. The text goes back to the chat box, never to motion."""
+    from .hardware_control import writes_enabled
+
+    if writes_enabled():
+        _local_hardware_request(request)
+    mime_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if mime_type not in assistant.AUDIO_TYPES:
+        raise HTTPException(415, "Send a recorded audio clip (for example audio/webm).")
+    if int(request.headers.get("content-length") or 0) > assistant.MAX_AUDIO_BYTES:
+        raise HTTPException(413, "That recording is too long. Keep voice commands short.")
+    audio = await request.body()
+    if len(audio) > assistant.MAX_AUDIO_BYTES:
+        raise HTTPException(413, "That recording is too long. Keep voice commands short.")
+    if not audio:
+        raise HTTPException(422, "The recording was empty.")
+    saved = [{"id": m["id"], "name": m["name"]} for m in macros()]
+    try:
+        text = await assistant.transcribe(audio, mime_type, SERVO_NAMES, saved)
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except assistant.TranscriptionError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"text": text, "provider": "gemini"}
+
+
+@app.post("/api/assistant/proposals/{proposal_id}/confirm")
+async def confirm_proposal(proposal_id: str):
+    try:
+        command = assistant.claim_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Proposal not found") from exc
+    except assistant.ProposalGone as exc:
+        raise HTTPException(410, str(exc)) from exc
+    if command.type == "pose":
+        return await control_pose(Pose(positions=command.positions))
+    return await play_macro(command.macro_id)
+
+
+@app.post("/api/assistant/proposals/{proposal_id}/cancel")
+def cancel_proposal(proposal_id: str):
+    try:
+        assistant.cancel_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Proposal not found") from exc
+    return {"cancelled": True}
+
+
+SETTINGS_LOCAL_ONLY = "Provider settings are available only from the local website."
+SETTING_VALUE = re.compile(r"^[\w.\-~:/+=@]+$")
+
+
+class ProviderSettingsInput(BaseModel):
+    api_key: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=200)
+
+    @field_validator("api_key", "model")
+    @classmethod
+    def single_safe_token(cls, value, info):
+        if value is None:
+            return None
+        value = value.strip()
+        if info.field_name == "api_key" and not value:
+            raise ValueError("Paste a key, or use Clear key to remove it")
+        if value and not SETTING_VALUE.match(value):
+            raise ValueError("Use a single value without spaces, quotes or line breaks")
+        return value
+
+
+def _local_settings_request(request: Request) -> None:
+    """Settings write secrets, so only loopback clients and pages are accepted, on any dev port."""
+    client_host = request.client.host if request.client else ""
+    origin = request.headers.get("origin")
+    if origin:
+        try:
+            parsed = urlsplit(origin)
+            local_origin = parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1") and parsed.port is not None and not parsed.path
+        except ValueError:
+            local_origin = False
+    if client_host not in ("127.0.0.1", "::1", "testclient") or (origin and not local_origin):
+        raise HTTPException(403, SETTINGS_LOCAL_ONLY)
+
+
+def _settings_provider(name: str) -> None:
+    if name not in assistant.CONFIGURABLE:
+        raise HTTPException(404, "Unknown configurable provider")
+
+
+@app.get("/api/settings/providers")
+def provider_settings(request: Request):
+    _local_settings_request(request)
+    return assistant.settings_list()
+
+
+@app.put("/api/settings/providers/{name}")
+def update_provider_settings(name: str, payload: ProviderSettingsInput, request: Request):
+    _local_settings_request(request)
+    _settings_provider(name)
+    assistant.update_settings(name, payload.api_key, payload.model)
+    return next(p for p in assistant.settings_list() if p["name"] == name)
+
+
+@app.delete("/api/settings/providers/{name}/key")
+def clear_provider_key(name: str, request: Request):
+    _local_settings_request(request)
+    _settings_provider(name)
+    assistant.clear_key(name)
+    return next(p for p in assistant.settings_list() if p["name"] == name)
+
+
+@app.post("/api/settings/providers/{name}/test")
+async def test_provider_settings(name: str, request: Request):
+    _local_settings_request(request)
+    _settings_provider(name)
+    return await assistant.test_provider(name)
 
 
 @app.websocket("/ws/telemetry")

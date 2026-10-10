@@ -1,9 +1,9 @@
 import React, {useEffect, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {ArrowDownToLine, ArrowUpFromLine, Camera, CircleHelp, Cpu, Hand, LayoutDashboard, Menu, Pause, Play, Plus, RotateCcw, Save, Settings2, ShieldCheck, SlidersHorizontal, Square, Trash2, X} from 'lucide-react'
+import {ArrowDownToLine, ArrowUpFromLine, Camera, CircleHelp, Cpu, Hand, LayoutDashboard, Menu, MessageSquare, Mic, Pause, Play, Plus, RotateCcw, Save, Settings, Settings2, ShieldCheck, SlidersHorizontal, Square, Trash2, X} from 'lucide-react'
 import './index.css'
 
-type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Calibration'|'Devices'
+type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'AI Assistant'|'Calibration'|'Devices'|'Settings'
 type Step = {positions: Record<number,number>,duration_ms:number}
 type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[]}
 type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
@@ -23,6 +23,18 @@ const blank = ():Record<number,number>=>Object.fromEntries([1,2,3,4,5,6].map(id=
 const initialStatus:Status={mode:'simulation',positions:blank(),target:blank(),stopped:false,playing:false,last_event:'Connecting',vision:null,devices:{controller:'Not connected',glasses:'Not connected',camera:'Browser preview only'}}
 async function api<T>(path:string,options?:RequestInit):Promise<T>{const response=await fetch('/api'+path,{headers:{'Content-Type':'application/json'},...options}); if(!response.ok){let message=`Request failed (${response.status})`;try{const error=await response.json();message=typeof error.detail==='string'?error.detail:JSON.stringify(error.detail)}catch{}throw Error(message)}return response.status===204?undefined as T:response.json()}
 const json=(body:unknown)=>JSON.stringify(body)
+type HardwareStop = {attempted:boolean,failed_ids?:number[],message:string}
+const stopNotice=(result:{hardware_stop?:HardwareStop})=>`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`
+type ProviderName = 'gemini'|'openrouter'|'huggingface'|'offline'
+type Provider = {name:ProviderName,label:string,available:boolean,model:string|null}
+type Proposal = {id:string,provider:string,expires_in_s:number,command:{type:'pose',positions:Record<number,number>,label:string}|{type:'macro',macro_id:string,name:string}}
+type ChatReply = {provider:string,reply:string,proposal:Proposal|null,stopped:boolean,hardware_stop?:HardwareStop}
+type Turn = {role:'user'|'assistant',text:string,provider?:string,proposal?:Proposal|null,at:number,state?:'pending'|'sent'|'cancelled'|'expired'}
+type SpeechResultEvent = {resultIndex:number,results:ArrayLike<ArrayLike<{transcript:string}> & {isFinal:boolean}>}
+type Recognizer = {lang:string,interimResults:boolean,continuous:boolean,onresult:((e:SpeechResultEvent)=>void)|null,onend:(()=>void)|null,onerror:((e:{error:string})=>void)|null,start:()=>void,stop:()=>void,abort:()=>void}
+const speechErrors:Record<string,string>={'not-allowed':'Microphone is blocked. Click the mic icon in the address bar, allow it, then try again.','service-not-allowed':'Speech recognition is blocked in this browser. Use Chrome or Edge with microphone access allowed.','audio-capture':'No working microphone found. Plug one in, close apps using it, and check Windows Settings › Privacy › Microphone.','network':'The speech service is unreachable. Voice needs an internet connection in Chrome or Edge.','no-speech':'Didn’t hear anything. Click the mic and start speaking.','language-not-supported':'English speech recognition is not available in this browser.'}
+const micError=(e:unknown)=>{const name=e instanceof DOMException?e.name:'';return name==='NotAllowedError'||name==='SecurityError'?speechErrors['not-allowed']:name==='NotFoundError'||name==='NotReadableError'||name==='OverconstrainedError'?speechErrors['audio-capture']:`Could not open the microphone (${name||String(e)}).`}
+const speechCtor=():(new()=>Recognizer)|undefined=>{const w=window as unknown as {SpeechRecognition?:new()=>Recognizer,webkitSpeechRecognition?:new()=>Recognizer};return w.SpeechRecognition||w.webkitSpeechRecognition}
 
 function App(){
  const [page,setPage]=useState<Page>('Dashboard'),[status,setStatus]=useState<Status>(initialStatus),[hardware,setHardware]=useState<HardwareStatus|null>(null),[macros,setMacros]=useState<Macro[]>([]),[cal,setCal]=useState<Calibration[]>([]),[manual,setManual]=useState<Record<number,number>>(blank()),[error,setError]=useState(''),[notice,setNotice]=useState(''),[connected,setConnected]=useState(false),[menuOpen,setMenuOpen]=useState(false)
@@ -32,10 +44,10 @@ function App(){
  useEffect(()=>{scanHardware();const timer=window.setInterval(scanHardware,20000);return()=>clearInterval(timer)},[])
  const action=async<T,>(work:()=>Promise<T>,success?:string)=>{try{setError('');const result=await work();if(success)setNotice(success);return result}catch(e){setError(e instanceof Error?e.message:String(e));return undefined}}
  const play=async(m:Macro)=>{await action(()=>api(`/macros/${m.id}/play`,{method:'POST'}),`Playing ${m.name} in simulation`)}
- const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:{attempted:boolean,failed_ids?:number[],message:string}}>('/control/stop',{method:'POST'}));if(result)setNotice(`Software stop latched. ${result.hardware_stop?.message==='Physical writes are disabled.'?'Simulation halted.':result.hardware_stop?.message||'Use the physical power cutoff if the glove moves.'}`)}
+ const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:HardwareStop}>('/control/stop',{method:'POST'}));if(result)setNotice(stopNotice(result))}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
  const applyManual=()=>action(()=>api('/control/pose',{method:'POST',body:json({positions:manual})}),'Pose sent to simulation')
- const nav:[Page,React.ElementType][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['Calibration',Settings2],['Devices',Cpu]]
+ const nav:[Page,React.ElementType][]=[['Dashboard',LayoutDashboard],['Manual Control',SlidersHorizontal],['Macro Studio',Hand],['AI Vision',Camera],['AI Assistant',MessageSquare],['Calibration',Settings2],['Devices',Cpu],['Settings',Settings]]
  const navigate=(next:Page)=>{setPage(next);setMenuOpen(false);setNotice('');window.scrollTo({top:0,behavior:'smooth'})}
  return <div className="app-layout">
   <aside className={`app-sidebar ${menuOpen?'open':''}`}>
@@ -55,13 +67,15 @@ function App(){
     {page==='Manual Control'&&<Manual status={status} hardware={hardware} cal={cal} onReading={setHardware} action={action} manual={manual} setManual={setManual} apply={applyManual} go={navigate}/>}
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} refresh={refresh} action={action} play={play} manual={manual}/>}
     {page==='AI Vision'&&<Vision/>}
+    {page==='AI Assistant'&&<Assistant macros={macros} action={action} setNotice={setNotice} setError={setError}/>}
     {page==='Calibration'&&<CalibrationPage cal={cal} hardware={hardware} onReading={setHardware} refresh={refresh} action={action}/>}
     {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware} action={action} go={navigate}/>}
+    {page==='Settings'&&<SettingsPage action={action}/>}
    </main>
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Set each servo position and speed, or try a simulated pose.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record direct-test limits and gesture positions separately.',Devices:'See live servo status and check small movement commands.'}
+const subtitles:Record<Page,string>={Settings:'Connect AI providers for the assistant. Keys stay on the local server.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Set each servo position and speed, or try a simulated pose.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Calibration:'Record direct-test limits and gesture positions separately.',Devices:'See live servo status and check small movement commands.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 function HandGraphic(){
@@ -81,6 +95,36 @@ function Dashboard({status,hardware,macros,play,go,stop}:{status:Status,hardware
  <section className="overview-panel gestures-panel"><div className="overview-panel-head"><span className="panel-icon"><Hand size={21}/></span><div className="panel-head-copy"><div className="section-kicker">SAVED MOVEMENTS</div><h2>Gestures, ready to test.</h2><p>Choose a macro to preview it in the simulated hand.</p></div><button className="plain-link" onClick={()=>go('Macro Studio')}>Open Macro Studio <span aria-hidden="true">↗</span></button></div><div className="overview-gesture-grid">{macros.slice(0,4).map((m,i)=><button key={m.id} disabled={status.stopped} onClick={()=>play(m)} className="overview-gesture"><span className="gesture-index">{String(i+1).padStart(2,'0')}</span><span><b>{m.name}</b><small>{m.description||'Custom gesture'}</small></span><Play size={15} fill="currentColor"/></button>)}</div><div className="panel-note"><span className="status-dot"/><span>{macros.length} saved macros</span></div></section>
  </div>}
 type ManualAction = <T,>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>
+type ProviderSetting = {name:ProviderName,label:string,key_set:boolean,key_hint:string|null,model:string,default_model:string}
+type ProviderTest = {ok:boolean,message:string,latency_ms:number|null}
+function SettingsPage({action}:{action:ManualAction}){
+ const [rows,setRows]=useState<ProviderSetting[]>([]),[keys,setKeys]=useState<Record<string,string>>({}),[models,setModels]=useState<Record<string,string>>({}),[tests,setTests]=useState<Record<string,ProviderTest|'testing'>>({}),[clearing,setClearing]=useState(''),[busy,setBusy]=useState('')
+ const load=async()=>{const list=await action(()=>api<ProviderSetting[]>('/settings/providers'));if(list){setRows(list);setModels(Object.fromEntries(list.map(p=>[p.name,p.model===p.default_model?'':p.model])))}}
+ useEffect(()=>{load()},[])
+ const replace=(row:ProviderSetting)=>setRows(r=>r.map(x=>x.name===row.name?row:x))
+ const draftKey=(p:ProviderSetting)=>(keys[p.name]??'').trim(),draftModel=(p:ProviderSetting)=>(models[p.name]??'').trim(),dirty=(p:ProviderSetting)=>!!draftKey(p)||draftModel(p)!==(p.model===p.default_model?'':p.model)
+ const save=async(p:ProviderSetting)=>{const key=draftKey(p),body:{api_key?:string,model:string}={model:draftModel(p)};if(key)body.api_key=key;setBusy(p.name);try{const row=await action(()=>api<ProviderSetting>(`/settings/providers/${p.name}`,{method:'PUT',body:json(body)}),`${p.label} settings saved`);if(row){replace(row);setKeys(k=>({...k,[p.name]:''}));setTests(t=>{const{[p.name]:_,...rest}=t;return rest})}return row}finally{setBusy('')}}
+ const clear=async(p:ProviderSetting)=>{setBusy(p.name);try{const row=await action(()=>api<ProviderSetting>(`/settings/providers/${p.name}/key`,{method:'DELETE'}),`${p.label} key cleared`);if(row)replace(row)}finally{setBusy('');setClearing('')}}
+ const test=async(p:ProviderSetting)=>{if(dirty(p)){const row=await save(p);if(!row?.key_set)return};setTests(t=>({...t,[p.name]:'testing'}));const result=await action(()=>api<ProviderTest>(`/settings/providers/${p.name}/test`,{method:'POST'}));setTests(t=>({...t,[p.name]:result??{ok:false,message:'Test request failed',latency_ms:null}}))}
+ return <div className="space-y-5 max-w-[860px]">
+  <div className="card p-5"><Eyebrow>AI providers</Eyebrow><p className="text-xs text-[#839187] mt-2">Keys are saved on the server in backend/.env and are never shown again; only the last four characters appear. The Offline provider needs no key. Changes apply immediately.</p></div>
+  {rows.map(p=>{const result=tests[p.name];return <div key={p.name} className="card p-5">
+   <div className="flex flex-wrap justify-between items-center gap-2"><div className="font-bold text-sm">{p.label}</div><Pill tone={p.key_set?'green':'gray'}>{p.key_set?`Key set ${p.key_hint??''}`:'No key'}</Pill></div>
+   <div className="grid sm:grid-cols-2 gap-3 mt-4">
+    <label className="text-xs font-bold text-[#6b7f72]">API key<input className="field mt-1 w-full" type="password" autoComplete="off" spellCheck={false} maxLength={500} placeholder={p.key_set?`Paste new key to replace ${p.key_hint??''}`:'Paste new key'} value={keys[p.name]??''} onChange={e=>setKeys(k=>({...k,[p.name]:e.target.value}))}/></label>
+    <label className="text-xs font-bold text-[#6b7f72]">Model<input className="field mt-1 w-full" spellCheck={false} maxLength={200} placeholder={p.default_model} value={models[p.name]??''} onChange={e=>setModels(m=>({...m,[p.name]:e.target.value}))}/></label>
+   </div>
+   <div className="flex flex-wrap items-center gap-2 mt-4">
+    <button className="btn btn-primary" disabled={busy===p.name} onClick={()=>save(p)}>Save</button>
+    <button className="btn btn-secondary" disabled={busy===p.name||result==='testing'||(!p.key_set&&!draftKey(p))} title={!p.key_set&&!draftKey(p)?'Paste a key first':undefined} onClick={()=>test(p)}>{result==='testing'?'Testing…':dirty(p)?'Save & test':'Test'}</button>
+    {p.key_set&&(clearing===p.name?<><span className="text-xs text-[#63796a]">Remove the saved {p.label} key?</span><button className="btn btn-secondary" disabled={busy===p.name} onClick={()=>clear(p)}>Yes, clear key</button><button className="btn btn-secondary" onClick={()=>setClearing('')}>Keep</button></>:<button className="btn btn-secondary" disabled={busy===p.name} onClick={()=>setClearing(p.name)}>Clear key</button>)}
+   </div>
+   {result&&result!=='testing'&&<p className={`text-xs mt-3 font-bold ${result.ok?'text-[#247658]':'text-[#b4533f]'}`}>{result.ok?`OK · ${result.latency_ms} ms · ${result.message}`:result.message}</p>}
+   {!p.key_set&&!draftKey(p)&&<p className="text-[11px] text-[#839187] mt-2">Paste a key to enable Test.</p>}
+   <p className="text-[11px] text-[#839187] mt-2">Using model {p.model}{p.model===p.default_model?' (default)':''}. Leave Model empty to use the default.</p>
+  </div>})}
+ </div>
+}
 function HardwareManual({status,hardware,cal,onReading,action,go}:{status:Status,hardware:HardwareStatus|null,cal:Calibration[],onReading:(reading:HardwareStatus)=>void,action:ManualAction,go:(page:Page)=>void}){
  const [control,setControl]=useState<HardwareControlInfo|null>(null)
  const [targets,setTargets]=useState<Record<number,number>>({})
@@ -168,6 +212,122 @@ function MacroStudio({macros,status,refresh,action,play,manual}:{macros:Macro[],
  return <><div className="flex flex-wrap gap-2 mb-5"><button className="btn btn-primary flex items-center gap-2" onClick={fresh}><Plus size={17}/> New macro</button><button className="btn btn-secondary flex items-center gap-2" onClick={exportFile}><ArrowDownToLine size={16}/> Export</button><button className="btn btn-secondary flex items-center gap-2" onClick={()=>file.current?.click()}><ArrowUpFromLine size={16}/> Import</button><input ref={file} type="file" accept="application/json,.json" className="hidden" onChange={e=>{if(e.target.files?.[0])importFile(e.target.files[0]);e.currentTarget.value=''}}/></div><div className="macro-table"><div className="macro-table-head"><span>GESTURE</span><span>TYPE</span><span>CHANNELS</span><span>ACTIONS</span></div>{macros.map((m,i)=><div key={m.id} className="macro-table-row"><span className="macro-index">{String(i+1).padStart(2,'0')}</span><div className="macro-title"><b>{m.name}</b><small>{m.description||'Custom movement'}</small></div><span className="macro-kind">{m.kind==='pose'?'Pose':`Sequence · ${m.steps.length} steps`}</span><div className="macro-channel-bars" aria-label="First step position by servo">{servos.map((_,j)=><span key={j}><i style={{height:`${m.steps[0].positions[j+1]}%`}}/></span>)}</div><div className="macro-actions"><button disabled={status.stopped} className="macro-play" onClick={()=>play(m)}><Play size={13} fill="currentColor"/> Play</button><button aria-label={`Edit ${m.name}`} onClick={()=>edit(m)}><Settings2 size={16}/></button><button aria-label={`Delete ${m.name}`} onClick={()=>remove(m)}><Trash2 size={15}/></button></div></div>)}</div>
  {editing&&<div className="fixed inset-0 bg-[#0d2520]/60 z-40 flex justify-end" onClick={()=>setEditing(false)}><div className="h-full w-full max-w-[590px] bg-[#f8faf7] overflow-y-auto mini-scroll p-6 md:p-8" onClick={e=>e.stopPropagation()}><div className="flex justify-between items-start"><div><Eyebrow>Macro editor</Eyebrow><h2 className="text-2xl font-bold mt-1">{selected?'Edit macro':'Create macro'}</h2></div><button aria-label="Close editor" onClick={()=>setEditing(false)}><X/></button></div><label className="block text-sm font-bold mt-7 mb-2">Name</label><input className="field" value={draft.name} maxLength={60} onChange={e=>setDraft({...draft,name:e.target.value})}/><label className="block text-sm font-bold mt-4 mb-2">Description</label><textarea className="field" rows={2} value={draft.description} maxLength={240} onChange={e=>setDraft({...draft,description:e.target.value})}/><label className="block text-sm font-bold mt-4 mb-2">Type</label><select className="field" value={draft.kind} onChange={e=>{const kind=e.target.value as 'pose'|'sequence';setDraft({...draft,kind,steps:kind==='pose'?draft.steps.slice(0,1):draft.steps})}}><option value="pose">Pose · one position</option><option value="sequence">Sequence · timed steps</option></select><div className="mt-7 space-y-4">{draft.steps.map((step,stepIndex)=><div key={stepIndex} className="card p-5"><div className="flex justify-between items-center mb-4"><h3 className="font-bold">Step {stepIndex+1}</h3>{draft.kind==='sequence'&&draft.steps.length>1&&<button className="text-red-600 text-xs font-bold flex items-center gap-1" onClick={()=>setDraft({...draft,steps:draft.steps.filter((_,i)=>i!==stepIndex)})}><Trash2 size={14}/> Remove</button>}</div><div className="grid grid-cols-2 gap-3">{servos.map((name,i)=><label key={i} className="text-xs font-semibold text-[#62776c]">{name}<div className="flex gap-2 items-center"><input aria-label={`${name} step ${stepIndex+1}`} className="w-full" type="range" min="0" max="100" value={step.positions[i+1]} onChange={e=>{const steps=structuredClone(draft.steps);steps[stepIndex].positions[i+1]=Number(e.target.value);setDraft({...draft,steps})}}/><span className="w-7 text-right text-teal">{step.positions[i+1]}</span></div></label>)}</div><label className="block text-xs font-bold text-[#62776c] mt-4">Move duration (ms)</label><input className="field mt-1" type="number" min="100" max="10000" value={step.duration_ms} onChange={e=>{const steps=structuredClone(draft.steps);steps[stepIndex].duration_ms=Number(e.target.value);setDraft({...draft,steps})}}/></div>)}</div>{draft.kind==='sequence'&&<button className="btn btn-secondary mt-4 flex items-center gap-2" disabled={draft.steps.length>=30} onClick={()=>setDraft({...draft,steps:[...draft.steps,{positions:{...draft.steps.at(-1)!.positions},duration_ms:700}]})}><Plus size={16}/> Add step</button>}<div className="sticky bottom-0 bg-[#f8faf7] py-5 mt-6 border-t flex gap-2"><button className="btn btn-primary flex-1 flex justify-center gap-2" onClick={save}><Save size={16}/> Save macro</button><button className="btn btn-secondary" onClick={()=>setEditing(false)}>Cancel</button></div></div></div>}
  </>}
+const providerOrder:ProviderName[]=['gemini','openrouter','huggingface']
+function Assistant({macros,action,setNotice,setError}:{macros:Macro[],action:ManualAction,setNotice:(m:string)=>void,setError:(m:string)=>void}){
+ const [providers,setProviders]=useState<Provider[]>([]),[provider,setProvider]=useState<string>('offline'),[turns,setTurns]=useState<Turn[]>([]),[input,setInput]=useState(''),[waiting,setWaiting]=useState(false)
+ const [listening,setListening]=useState(false),[transcribing,setTranscribing]=useState(false),[speak,setSpeak]=useState(false),[now,setNow]=useState(Date.now()),[busyId,setBusyId]=useState('')
+ const recognizer=useRef<Recognizer|null>(null),recorder=useRef<MediaRecorder|null>(null),sendRef=useRef<(text?:string)=>void>(()=>{}),speakRef=useRef(false),bottom=useRef<HTMLDivElement>(null)
+ const supported=!!speechCtor(),canSpeak='speechSynthesis' in window,canRecord=typeof MediaRecorder!=='undefined'&&!!navigator.mediaDevices
+ const geminiVoice=canRecord&&providers.some(p=>p.name==='gemini'&&p.available),voiceReady=geminiVoice||supported
+ speakRef.current=speak
+ useEffect(()=>{api<Provider[]>('/assistant/providers').then(list=>{setProviders(list);const first=providerOrder.find(n=>list.some(p=>p.name===n&&p.available));setProvider(first??'offline')}).catch(e=>setError(e instanceof Error?e.message:String(e)))},[])
+ useEffect(()=>{if(!turns.some(t=>t.state==='pending'))return;const timer=window.setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer)},[turns])
+ useEffect(()=>{bottom.current?.scrollIntoView?.({block:'nearest'})},[turns.length])
+ useEffect(()=>()=>{recognizer.current?.abort();if(recorder.current?.state==='recording'){recorder.current.onstop=null;recorder.current.stop()};if('speechSynthesis' in window)window.speechSynthesis.cancel()},[])
+ const current=providers.find(p=>p.name===provider)
+ const send=async(override?:string)=>{
+  const text=(override??input).trim()
+  if(!text||waiting)return
+  const history=turns.slice(-10).map(t=>({role:t.role,text:t.text}))
+  setInput('');setWaiting(true)
+  setTurns(t=>[...t,{role:'user',text,at:Date.now()}])
+  try{
+   const result=await action(()=>api<ChatReply>('/assistant/chat',{method:'POST',body:json({provider,message:text,history})}))
+   if(result){
+    setTurns(t=>[...(result.stopped?t.map(x=>x.state==='pending'?{...x,state:'cancelled' as const}:x):t),{role:'assistant',text:result.reply,provider:result.provider,proposal:result.proposal,at:Date.now(),state:result.proposal?'pending':undefined}])
+    if(result.stopped){setNotice(stopNotice(result));window.speechSynthesis?.cancel()}
+    else if(speakRef.current&&canSpeak&&result.reply)window.speechSynthesis.speak(new SpeechSynthesisUtterance(result.reply))
+   }
+  }finally{setWaiting(false)}
+ }
+ sendRef.current=send
+ const mark=(id:string,state:Turn['state'])=>setTurns(t=>t.map(x=>x.proposal?.id===id?{...x,state}:x))
+ const confirm=async(p:Proposal)=>{
+  setBusyId(p.id);setError('')
+  try{
+   const response=await fetch(`/api/assistant/proposals/${encodeURIComponent(p.id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'}})
+   if(response.ok){mark(p.id,'sent');setNotice('Sent to simulation');return}
+   let detail=`Request failed (${response.status})`;try{const body=await response.json();if(typeof body.detail==='string')detail=body.detail}catch{}
+   if(response.status===410){mark(p.id,'expired');return}
+   setError(response.status===409?`Not confirmed: ${detail}`:detail)
+  }catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusyId('')}
+ }
+ const cancel=async(p:Proposal)=>{setBusyId(p.id);try{const result=await action(()=>api(`/assistant/proposals/${encodeURIComponent(p.id)}/cancel`,{method:'POST'}));if(result!==undefined)mark(p.id,'cancelled')}finally{setBusyId('')}}
+ // Gemini voice: record a short clip, transcribe it on the server, then send the text like a typed message.
+ const toggleRecording=async()=>{
+  if(recorder.current){recorder.current.stop();return}
+  setError('');window.speechSynthesis?.cancel()
+  let stream:MediaStream
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){setError(micError(e));return}
+  const type=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t))
+  const rec=new MediaRecorder(stream,type?{mimeType:type}:undefined),chunks:Blob[]=[]
+  const limit=window.setTimeout(()=>{if(rec.state==='recording')rec.stop()},15000)
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)}
+  rec.onstop=async()=>{
+   clearTimeout(limit);stream.getTracks().forEach(track=>track.stop());recorder.current=null;setListening(false)
+   const blob=new Blob(chunks,{type:rec.mimeType||type||'audio/webm'})
+   if(!blob.size){setError('Nothing was recorded. Click the mic and try again.');return}
+   setTranscribing(true)
+   try{
+    const response=await fetch('/api/assistant/transcribe',{method:'POST',headers:{'Content-Type':blob.type},body:blob}),body=await response.json().catch(()=>({}))
+    if(!response.ok){setError(typeof body.detail==='string'?body.detail:`Transcription failed (${response.status})`);return}
+    if(!body.text){setError('Didn’t catch that. Click the mic and try again.');return}
+    sendRef.current(body.text)
+   }catch(e){setError(e instanceof Error?e.message:String(e))}finally{setTranscribing(false)}
+  }
+  recorder.current=rec;rec.start();setListening(true)
+ }
+ const toggleMic=()=>{
+  if(geminiVoice){toggleRecording();return}
+  if(listening){recognizer.current?.stop();return}
+  const Ctor=speechCtor();if(!Ctor)return
+  setError('');setListening(true);window.speechSynthesis?.cancel()
+  // Ask for the mic first: it shows the permission prompt and names device problems precisely.
+  const begin=async()=>{
+   try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(track=>track.stop())}catch(e){setListening(false);setError(micError(e));return}
+   const r=new Ctor();r.lang='en-US';r.interimResults=true;r.continuous=false
+   let heard='',sent=false
+   r.onresult=e=>{let text='',final=false;for(let i=e.resultIndex;i<e.results.length;i++){text+=e.results[i][0].transcript;if(e.results[i].isFinal)final=true};heard=text;if(final&&!sent){sent=true;setInput('');sendRef.current(text)}else if(!final)setInput(text)}
+   r.onend=()=>{setListening(false);recognizer.current=null;if(!sent&&heard.trim()){sent=true;setInput('');sendRef.current(heard)}}
+   r.onerror=e=>{if(e.error!=='aborted')setError(speechErrors[e.error]??`Voice input failed (${e.error}).`)}
+   recognizer.current=r
+   try{r.start()}catch(e){setListening(false);recognizer.current=null;setError(`Voice input could not start (${e instanceof Error?e.message:String(e)}).`)}
+  }
+  begin()
+ }
+ const bars=(positions:Record<number,number>)=><div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 mt-3">{servos.map((name,j)=><div key={name} className="text-[11px] text-[#63796a]"><div className="flex justify-between"><span>{name}</span><b className="text-[#1e4937]">{positions[j+1]??0}%</b></div><span className="channel-meter block mt-1"><i style={{width:`${positions[j+1]??0}%`}}/></span></div>)}</div>
+ const proposalCard=(t:Turn)=>{
+  const p=t.proposal!,expired=t.state==='pending'&&now>t.at+p.expires_in_s*1000,state=expired?'expired':t.state,macro=p.command.type==='macro'?macros.find(m=>m.id===(p.command as {macro_id:string}).macro_id):undefined
+  return <div className="card p-4 mt-3" aria-label="Movement proposal">
+   <div className="flex flex-wrap justify-between items-start gap-2"><div><Eyebrow>Proposed movement · {p.provider}</Eyebrow><div className="font-bold text-sm mt-1">{p.command.type==='pose'?p.command.label:p.command.name}</div></div>
+    {state==='pending'?<Pill tone="amber">Awaiting approval</Pill>:<span className="text-xs font-bold text-[#63796a]">{state==='sent'?'Sent to simulation':state==='cancelled'?'Cancelled':'Expired'}</span>}</div>
+   {p.command.type==='pose'?bars(p.command.positions):macro?bars(macro.steps[0].positions):null}
+   {state==='pending'&&<div className="flex gap-2 mt-4"><button className="btn btn-primary" disabled={busyId===p.id} onClick={()=>confirm(p)}>Confirm</button><button className="btn btn-secondary" disabled={busyId===p.id} onClick={()=>cancel(p)}>Cancel</button></div>}
+  </div>
+ }
+ return <div className="space-y-5 max-w-[860px]">
+  <div className="card p-5">
+   <div className="flex flex-wrap items-end justify-between gap-3"><label className="text-xs font-bold text-[#6b7f72]">Provider<select className="field mt-1" value={provider} onChange={e=>setProvider(e.target.value)}>{providers.map(p=><option key={p.name} value={p.name} disabled={!p.available}>{p.label}{p.available?'':' (no key)'}</option>)}{!providers.length&&<option value="offline">Offline</option>}</select></label><span className="text-xs text-[#839187]">{current?.model?`Model: ${current.model}`:'No model'}</span></div>
+   <p className="text-xs text-[#839187] mt-3">The assistant only proposes simulated moves. It cannot drive the Devices hardware test. Say or type “stop” to stop immediately.</p>
+  </div>
+  <div className="card p-5">
+   <div className="min-h-[160px] max-h-[460px] overflow-y-auto mini-scroll" aria-live="polite">
+    {!turns.length&&<p className="text-xs text-[#839187]">Try “make a fist” or “play Open hand”. Nothing moves until you click Confirm.</p>}
+    {turns.map((t,i)=><div key={i} className="border border-[#e8ece8] rounded-xl px-4 py-3 mb-2 text-[13px] leading-5"><div className="text-[10px] uppercase tracking-[.12em] font-extrabold text-[#8d9d90] mb-1">{t.role==='user'?'You':`Assistant (${t.provider??provider})`}</div><div className="whitespace-pre-wrap">{t.text}</div>{t.proposal&&proposalCard(t)}</div>)}
+    {waiting&&<p className="text-xs text-[#839187]">Assistant is thinking…</p>}
+    <div ref={bottom}/>
+   </div>
+   <div className="flex gap-2 mt-4"><input className="field flex-1" aria-label="Message" placeholder={listening?'Listening…':'Ask for a pose or macro'} value={input} maxLength={500} disabled={waiting} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.nativeEvent.isComposing){e.preventDefault();send()}}}/>
+    {voiceReady&&<button className={`btn ${listening?'btn-primary':'btn-secondary'} flex items-center gap-2`} disabled={waiting||transcribing} onClick={toggleMic} aria-pressed={listening} aria-label={listening?'Stop listening':'Start voice input'}><Mic size={16}/>{listening?<span className="text-xs">{geminiVoice?'Recording':'Listening'}… click to stop</span>:transcribing?<span className="text-xs">Transcribing…</span>:null}</button>}
+    <button className="btn btn-primary" disabled={waiting||!input.trim()} onClick={()=>send()}>Send</button></div>
+   <div className="flex flex-wrap items-center gap-4 mt-3 text-xs text-[#839187]">
+    {canSpeak&&<label><input type="checkbox" checked={speak} onChange={e=>{setSpeak(e.target.checked);if(!e.target.checked)window.speechSynthesis.cancel()}} className="mr-2"/>Speak replies</label>}
+    {voiceReady?<span>Voice: {geminiVoice?'Gemini transcription':'browser speech (add a Gemini key in Settings for better accuracy)'}</span>:<span>Voice needs a Gemini key in Settings, or Chrome or Edge</span>}
+    <span>Spoken or typed words never confirm a move; only the Confirm button does.</span>
+   </div>
+  </div>
+ </div>
+}
 function Vision(){
  const video=useRef<HTMLVideoElement>(null)
  const stream=useRef<MediaStream|null>(null)

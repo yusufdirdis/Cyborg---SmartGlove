@@ -1,6 +1,6 @@
 # handoff — Phase 1
 
-A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
+A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, AI Assistant, Calibration, Devices, and Settings sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
 
 ## Servo map
 
@@ -51,6 +51,12 @@ On first launch, `backend/handos.sqlite3` is created with five editable sample p
 4. Use **Stop** to latch the software stop; **Reset simulation** allows movement again.
 
 Manual Control has separate physical count controls and simulated percentage controls. Moving a physical slider only changes its draft target; it never sends a command until a move is checked and confirmed. **Apply to simulation** still affects only the simulated pose. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
+
+## AI Assistant (chat and voice)
+
+The AI Assistant page turns typed or spoken requests ("make a peace sign", "open your hand") into a **proposal card**. Nothing moves until you click **Confirm**, and a confirmed proposal runs only in simulation through the normal pose and macro routes. The assistant has no hardware command and cannot drive the Devices hardware test. Saying or typing "stop" latches the same full stop as the Stop button. Typed or spoken words never confirm a move.
+
+Providers run server-side in `backend/app/assistant.py`: Gemini (`gemini-3.8-flash`, Interactions API), OpenRouter, Hugging Face Inference Providers, and an **Offline** keyword matcher that needs no key or network. Add keys on the **Settings** page (paste key, optional model, **Save**, then **Test**), or copy `backend/.env.example` to `backend/.env` (gitignored) by hand. Settings writes the same `backend/.env`, applies changes without a restart, and only ever shows the last four characters of a key; its routes accept local requests only. Providers without a key show as "no key". A provider error or timeout returns a text-only reply. Voice uses **Gemini transcription** when a Gemini key is set: click the mic, speak, and click again (clips stop after 15 s). The browser records a short `audio/webm` clip, `POST /api/assistant/transcribe` sends it to Gemini with the servo and macro names as vocabulary, and the transcript goes into the chat like typed text. Without a Gemini key, voice falls back to the browser Web Speech API (Chrome or Edge).
 
 ## Read-only controller status
 
