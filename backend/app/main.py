@@ -507,12 +507,12 @@ async def assistant_chat(payload: ChatInput, request: Request):
         _local_hardware_request(request)
     if payload.provider not in assistant.PROVIDERS:
         raise HTTPException(404, "Unknown assistant provider")
-    saved = [{"id": m["id"], "name": m["name"]} for m in macros()]
+    saved = [{"id": m["id"], "name": m["name"], "steps": len(m["steps"])} for m in macros()]
     reply, command = await assistant.ask(payload.provider, payload.message, [t.model_dump() for t in payload.history], SERVO_NAMES, saved)
     response = {"provider": payload.provider, "reply": reply, "proposal": None, "stopped": False}
     if command and command.type == "stop":
         response.update(stopped=True, hardware_stop=(await latch_stop())["hardware_stop"])
-    elif command and sim.stopped:
+    elif command and sim.stopped and command.type != "save_macro":
         response["reply"] = f"{reply} Software stop is latched, so nothing was proposed. Reset first."
     elif command:
         response["proposal"] = assistant.create_proposal(command, payload.provider)
@@ -546,6 +546,70 @@ async def assistant_transcribe(request: Request):
     return {"text": text, "provider": "gemini"}
 
 
+class LiveSaveStep(BaseModel):
+    positions: list[int]
+    duration_ms: int
+
+
+class LiveProposalInput(BaseModel):
+    action: Literal["pose", "macro", "save_macro"]
+    positions: list[int] | None = None
+    label: str | None = Field(default=None, max_length=60)
+    macro_id: str | None = None
+    name: str | None = Field(default=None, max_length=60)
+    steps: list[LiveSaveStep] | None = None
+    append_to_macro_id: str | None = None
+
+
+@app.post("/api/assistant/live/session")
+async def assistant_live_session(request: Request):
+    """Hands the browser a single-use ephemeral token. The prompt and tools stay server-side."""
+    _local_settings_request(request)
+    saved = [{"id": m["id"], "name": m["name"]} for m in macros()]
+    try:
+        created = await asyncio.wait_for(asyncio.to_thread(assistant.create_live_token, SERVO_NAMES, saved), assistant.PROVIDER_TIMEOUT_S + 2)
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except assistant.LiveTokenError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(502, "Gemini Live session timed out") from exc
+    return {**created, "system_instruction": assistant.live_instruction(SERVO_NAMES, saved), "tools": assistant.LIVE_TOOLS}
+
+
+@app.post("/api/assistant/live/proposal")
+async def assistant_live_proposal(payload: LiveProposalInput, request: Request):
+    """Turns a Live tool call into the same single-use proposal as chat. It never moves anything."""
+    _local_settings_request(request)
+    if sim.stopped and payload.action != "save_macro":
+        raise HTTPException(409, "Software stop is latched")
+    saved = [{"id": m["id"], "name": m["name"], "steps": len(m["steps"])} for m in macros()]
+    reply, command = assistant.parse_output(json.dumps({"reply": "", **payload.model_dump(exclude_none=True)}), list(SERVO_NAMES), saved)
+    if command is None:
+        raise HTTPException(422, reply)
+    return assistant.create_proposal(command, "gemini-live")
+
+
+def save_macro_from_command(command: assistant.Command) -> dict:
+    """Saves through the ordinary macro helpers. It never touches the simulation or hardware."""
+    steps = [Step.model_validate(s) for s in command.steps or []]
+    with db() as conn:
+        if command.append_to:
+            row = conn.execute("SELECT * FROM macros WHERE id=?", (command.append_to["macro_id"],)).fetchone()
+            if row is None:
+                raise HTTPException(409, "That macro no longer exists, so nothing was saved.")
+            existing = [Step.model_validate(s) for s in json.loads(row["steps"])]
+            if len(existing) + len(steps) > 30:
+                raise HTTPException(409, "That macro would pass 30 steps, so nothing was saved.")
+            payload = MacroInput(name=row["name"], description=row["description"], kind="sequence", steps=[*existing, *steps])
+            save_macro(conn, payload, row["id"])
+            saved_row = conn.execute("SELECT * FROM macros WHERE id=?", (row["id"],)).fetchone()
+        else:
+            payload = MacroInput(name=command.name, description="Saved from AI assistant", kind="pose" if len(steps) == 1 else "sequence", steps=steps)
+            saved_row = conn.execute("SELECT * FROM macros WHERE id=?", (save_macro(conn, payload),)).fetchone()
+    return {"saved": True, "mode": "saved", "macro": macro_row(saved_row)}
+
+
 @app.post("/api/assistant/proposals/{proposal_id}/confirm")
 async def confirm_proposal(proposal_id: str):
     try:
@@ -554,6 +618,8 @@ async def confirm_proposal(proposal_id: str):
         raise HTTPException(404, "Proposal not found") from exc
     except assistant.ProposalGone as exc:
         raise HTTPException(410, str(exc)) from exc
+    if command.type == "save_macro":
+        return save_macro_from_command(command)
     if command.type == "pose":
         return await control_pose(Pose(positions=command.positions))
     return await play_macro(command.macro_id)

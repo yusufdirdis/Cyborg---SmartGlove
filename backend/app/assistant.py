@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -31,40 +32,61 @@ load_dotenv(env_file())
 PROPOSAL_TTL_S = 60
 PROVIDER_TIMEOUT_S = 15
 MACROS_MARKER = "SAVED_MACROS_JSON:"
+SAVE_STEPS_MAX = 30
+STEP_MS_MIN = 100
+STEP_MS_MAX = 10000
 TEXT_ONLY = "Nothing was moved."
 MAX_AUDIO_BYTES = 4 * 1024 * 1024  # About four minutes of browser Opus; demo clips are seconds long.
 AUDIO_TYPES = {"audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/aac", "audio/flac", "audio/opus"}
 
 
+class SaveStep(BaseModel):
+    positions: list[int] | None = None
+    duration_ms: int | None = None
+
+
 class ModelOutput(BaseModel):
     """The JSON contract every provider must answer with."""
     reply: str = Field(default="", max_length=600)
-    action: Literal["none", "pose", "macro", "stop"]
+    action: Literal["none", "pose", "macro", "save_macro", "stop"]
     positions: list[int] | None = None
     label: str | None = Field(default=None, max_length=60)
     macro_id: str | None = None
+    name: str | None = Field(default=None, max_length=60)
+    steps: list[SaveStep] | None = None
+    append_to_macro_id: str | None = None
 
 
 OUTPUT_SCHEMA = {"type": "object", "required": ["reply", "action"], "properties": {
     "reply": {"type": "string"},
-    "action": {"type": "string", "enum": ["none", "pose", "macro", "stop"]},
+    "action": {"type": "string", "enum": ["none", "pose", "macro", "save_macro", "stop"]},
     "positions": {"type": "array", "items": {"type": "integer"}},
     "label": {"type": "string"},
     "macro_id": {"type": "string"},
+    "name": {"type": "string"},
+    "steps": {"type": "array", "items": {"type": "object", "properties": {
+        "positions": {"type": "array", "items": {"type": "integer"}},
+        "duration_ms": {"type": "integer"},
+    }}},
+    "append_to_macro_id": {"type": "string"},
 }}
 
 
 @dataclass(frozen=True)
 class Command:
-    type: Literal["pose", "macro", "stop"]
+    type: Literal["pose", "macro", "save_macro", "stop"]
     positions: dict[int, int] | None = None
     label: str = ""
     macro_id: str = ""
     name: str = ""
+    steps: list[dict] | None = None
+    append_to: dict | None = None
 
     def public(self) -> dict:
         if self.type == "pose":
             return {"type": "pose", "positions": self.positions, "label": self.label}
+        if self.type == "save_macro":
+            return {"type": "save_macro", "name": self.name, "steps": self.steps, "append_to": self.append_to}
         return {"type": self.type, "macro_id": self.macro_id, "name": self.name}
 
 
@@ -76,12 +98,16 @@ Servos, in this exact order (IDs 1-6):
 {servos}
 A position is an integer percentage: 0 = finger fully open/relaxed, 100 = fully flexed.
 Answer ONLY with one JSON object, no prose around it:
-{{"reply": short friendly sentence, "action": "none"|"pose"|"macro"|"stop",
+{{"reply": short friendly sentence, "action": "none"|"pose"|"macro"|"save_macro"|"stop",
   "positions": six integers 0-100 in servo ID order (only for "pose"),
   "label": short pose name (only for "pose"),
-  "macro_id": id of a saved macro (only for "macro")}}
+  "macro_id": id of a saved macro (only for "macro"),
+  "name": macro name, 1-60 characters (only for "save_macro"),
+  "steps": 1-{SAVE_STEPS_MAX} objects {{"positions": six integers 0-100, "duration_ms": {STEP_MS_MIN}-{STEP_MS_MAX}}} (only for "save_macro"),
+  "append_to_macro_id": id of a saved macro to extend (optional, only for "save_macro")}}
 Prefer "macro" when a saved macro matches the request. Use "stop" when the user asks to stop, halt or freeze.
-Use "none" for questions or anything that is not a hand gesture. Never claim the hand already moved; say it is ready for confirmation.
+"Save as X" or "make an N-step Y" means "save_macro"; to save the pose or movement you last proposed, reuse its exact positions in the steps.
+Use "none" for questions or anything that is not a hand gesture. Never claim the hand already moved or that anything was saved; say it is ready for confirmation.
 {MACROS_MARKER} {json.dumps(macros)}"""
 
 
@@ -213,6 +239,31 @@ def parse_output(text: str, servo_ids: list[int], macros: list[dict]) -> tuple[s
         if len(values) != len(servo_ids) or any(not 0 <= v <= 100 for v in values):
             return f"That pose needs six values from 0 to 100, so no move was proposed. {TEXT_ONLY}", None
         return reply, Command(type="pose", positions=dict(zip(servo_ids, values)), label=(output.label or "Custom pose").strip()[:60])
+    if output.action == "save_macro":
+        name = (output.name or "").strip()
+        if not name:
+            return f"A saved macro needs a name, so nothing was saved. {TEXT_ONLY}", None
+        raw_steps = output.steps or []
+        if not 1 <= len(raw_steps) <= SAVE_STEPS_MAX:
+            return f"That save needs 1 to {SAVE_STEPS_MAX} steps, so nothing was saved. {TEXT_ONLY}", None
+        steps = []
+        for step in raw_steps:
+            values = step.positions or []
+            if len(values) != len(servo_ids) or any(not 0 <= v <= 100 for v in values):
+                return f"Every saved step needs six values from 0 to 100, so nothing was saved. {TEXT_ONLY}", None
+            if step.duration_ms is None or not STEP_MS_MIN <= step.duration_ms <= STEP_MS_MAX:
+                return f"Every saved step needs a duration from {STEP_MS_MIN} to {STEP_MS_MAX} ms, so nothing was saved. {TEXT_ONLY}", None
+            steps.append({"positions": dict(zip(servo_ids, values)), "duration_ms": step.duration_ms})
+        append_to = None
+        if output.append_to_macro_id:
+            target = next((m for m in macros if m["id"] == output.append_to_macro_id), None)
+            if target is None:
+                return f"I couldn't find that saved macro, so nothing was saved. {TEXT_ONLY}", None
+            existing = target.get("steps")
+            if existing is not None and existing + len(steps) > SAVE_STEPS_MAX:
+                return f"That macro already has {existing} steps, so nothing was saved. {TEXT_ONLY}", None
+            append_to = {"macro_id": target["id"], "name": target["name"]}
+        return reply, Command(type="save_macro", name=name, steps=steps, append_to=append_to)
     macro = next((m for m in macros if m["id"] == output.macro_id), None)
     if macro is None:
         return f"I couldn't find that saved macro, so no move was proposed. {TEXT_ONLY}", None
@@ -365,3 +416,114 @@ async def transcribe(audio: bytes, mime_type: str, servo_names: dict[int, str], 
             detail = detail.replace(key, "••••")
         raise TranscriptionError(f"Gemini transcription failed ({type(exc).__name__}: {detail[:160]})") from exc
     return " ".join(text.split())
+
+
+# Gemini Live. The browser gets a single-use ephemeral token; the real key and the
+# prompt and tools stay on the server. Nothing here moves the hand.
+GEMINI_LIVE_MODEL_ENV = "GEMINI_LIVE_MODEL"
+GEMINI_LIVE_MODEL_DEFAULT = "gemini-3.8-live"
+LIVE_API_VERSION = "v1alpha"  # The browser's @google/genai live.connect pins v1alpha for ephemeral tokens.
+LIVE_TOKEN_MINUTES = 30
+LIVE_NEW_SESSION_WINDOW_S = 60
+
+
+def live_model() -> str:
+    return os.environ.get(GEMINI_LIVE_MODEL_ENV) or GEMINI_LIVE_MODEL_DEFAULT
+
+
+def live_instruction(servo_names: dict[int, str], macros: list[dict]) -> str:
+    servos = "\n".join(f"  {sid}: {name}" for sid, name in servo_names.items())
+    saved = ", ".join(f"{m['id']} ({m['name']})" for m in macros) or "none saved"
+    return f"""You are the live voice of handoff, a six-servo smart glove studio running in SIMULATION.
+You see the user through the camera and hear them through the microphone. Your main job is mirroring:
+when the user shows a hand gesture on camera, say what you see and propose the matching pose for the glove.
+Servos, in this exact order (IDs 1-6):
+{servos}
+A position is an integer percentage: 0 = finger fully open/relaxed, 100 = fully flexed.
+Saved macros, as id (name): {saved}. Prefer a matching saved macro over a new pose.
+When the user asks to save a movement as a macro, call propose_save_macro with its steps; to save what you last proposed, reuse those exact positions.
+Only call a tool when the user asks for a move, a mirror or a save. Never call a tool for questions, small talk or descriptions.
+Never say or imply the hand already moved or that anything was saved; say it is ready for the user's Confirm click.
+When the user says "stop", call stop_hand right away."""
+
+
+LIVE_TOOLS = [{"functionDeclarations": [
+    {"name": "propose_pose",
+     "description": "Propose a six-servo pose for the user to confirm. Nothing moves until the user clicks Confirm.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "positions": {"type": "ARRAY", "items": {"type": "INTEGER"},
+                       "description": "Six integers from 0 to 100 in servo ID order (0 = open, 100 = flexed)."},
+         "label": {"type": "STRING", "description": "Short pose name, for example 'Peace sign'."},
+     }, "required": ["positions", "label"]}},
+    {"name": "propose_macro",
+     "description": "Propose a saved macro by id for the user to confirm. Nothing moves until the user clicks Confirm.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "macro_id": {"type": "STRING", "description": "The id of a saved macro."},
+     }, "required": ["macro_id"]}},
+    {"name": "propose_save_macro",
+     "description": "Propose saving a movement as a macro for the user to confirm. Nothing is saved or moved until the user clicks Confirm.",
+     "parameters": {"type": "OBJECT", "properties": {
+         "name": {"type": "STRING", "description": "Short macro name, 1-60 characters."},
+         "steps": {"type": "ARRAY", "description": "One to 30 steps.",
+                   "items": {"type": "OBJECT", "properties": {
+                       "positions": {"type": "ARRAY", "items": {"type": "INTEGER"},
+                                     "description": "Six integers from 0 to 100 in servo ID order."},
+                       "duration_ms": {"type": "INTEGER", "description": "Step duration from 100 to 10000 milliseconds."},
+                   }, "required": ["positions", "duration_ms"]}},
+         "append_to_macro_id": {"type": "STRING", "description": "Optional id of a saved macro to extend."},
+     }, "required": ["name", "steps"]}},
+    {"name": "stop_hand",
+     "description": "Stop the glove immediately when the user asks to stop."},
+]}]
+
+
+class LiveTokenError(Exception):
+    pass
+
+
+def sdk_live_tools() -> list[dict]:
+    """LIVE_TOOLS in the python SDK's snake_case shape, for the locked token constraints."""
+    return [{"function_declarations": LIVE_TOOLS[0]["functionDeclarations"]}]
+
+
+def live_token_config(model: str, now: datetime, servo_names: dict[int, str], macros: list[dict]) -> dict:
+    """The full token config. The lock fixes the prompt, the tools and the media settings server-side."""
+    return {
+        "uses": 1,
+        "expire_time": now + timedelta(minutes=LIVE_TOKEN_MINUTES),
+        "new_session_expire_time": now + timedelta(seconds=LIVE_NEW_SESSION_WINDOW_S),
+        "live_connect_constraints": {"model": model, "config": {
+            "session_resumption": {},
+            "response_modalities": ["AUDIO"],
+            "system_instruction": live_instruction(servo_names, macros),
+            "tools": sdk_live_tools(),
+            "input_audio_transcription": {},
+            "output_audio_transcription": {},
+        }},
+    }
+
+
+def _sdk_create_token(key: str, config: dict) -> str:
+    """The one google-genai call, kept separate so tests never need the network."""
+    from google import genai
+
+    client = genai.Client(api_key=key, http_options={"api_version": LIVE_API_VERSION})
+    token = client.auth_tokens.create(config=config)
+    return token.name
+
+
+def create_live_token(servo_names: dict[int, str], macros: list[dict]) -> dict:
+    """Mints a single-use ephemeral token for the browser. The key never leaves the server."""
+    provider = PROVIDERS["gemini"]
+    if not provider.available():
+        raise PermissionError("Live voice needs a Gemini API key. Add one in Settings.")
+    key = _key(provider.key_env)
+    now = datetime.now(timezone.utc)
+    try:
+        name = _sdk_create_token(key, live_token_config(live_model(), now, servo_names, macros))
+    except Exception as exc:
+        detail = str(exc)
+        if key:
+            detail = detail.replace(key, "••••")
+        raise LiveTokenError(f"Gemini Live session failed ({type(exc).__name__}: {detail[:160]})") from exc
+    return {"token": name, "model": live_model(), "expires_at": (now + timedelta(minutes=LIVE_TOKEN_MINUTES)).isoformat()}
