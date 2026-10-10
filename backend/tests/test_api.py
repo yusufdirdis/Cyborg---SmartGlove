@@ -137,7 +137,7 @@ def test_read_only_hardware_status_uses_six_ids_and_never_writes(monkeypatch):
 
         def readReg(self, servo_id, address):
             calls.append(("read", servo_id, address))
-            return {56: 1000 + servo_id, 62: 124, 63: 35, 66: 0}[address]
+            return {56: 1000 + servo_id, 62: 124, 63: 35, 66: 0, 33: 0, 40: 1}[address]
 
         def closeSerialPort(self):
             calls.append(("close",))
@@ -149,5 +149,6 @@ def test_read_only_hardware_status_uses_six_ids_and_never_writes(monkeypatch):
     assert response.status_code == 200
     assert response.json()["connected"] is True
     assert [servo["id"] for servo in response.json()["servos"]] == list(range(1, 7))
+    assert all(servo["mode"] == 0 and servo["torque_enabled"] is True for servo in response.json()["servos"])
     assert [entry[1] for entry in calls if entry[0] == "ping"] == list(range(1, 7))
     assert calls[-1] == ("close",)

@@ -68,6 +68,8 @@ def scan_servos() -> dict:
                     voltage = driver.readReg(servo_id, 62)
                     temperature = driver.readReg(servo_id, 63)
                     moving = driver.readReg(servo_id, 66)
+                    mode = driver.readReg(servo_id, 33)
+                    torque = driver.readReg(servo_id, 40)
                     result["servos"].append(
                         {
                             "id": servo_id,
@@ -76,6 +78,8 @@ def scan_servos() -> dict:
                             "voltage_v": None if voltage is None else voltage / 10,
                             "temperature_c": temperature,
                             "moving": None if moving is None else bool(moving),
+                            "mode": mode,
+                            "torque_enabled": None if torque is None else bool(torque),
                         }
                     )
             result["connected"] = len(result["servos"]) == len(SERVO_IDS) and all(
