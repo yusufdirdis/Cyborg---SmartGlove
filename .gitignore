@@ -4,6 +4,8 @@ backend/.venv/
 backend/*.sqlite3
 backend/**/*.pyc
 backend/**/__pycache__/
+**/*.pyc
+**/__pycache__/
 backend/.pytest_cache/
 backend/tests/test.sqlite3
 frontend/*.tsbuildinfo
