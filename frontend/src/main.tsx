@@ -10,6 +10,11 @@ type Calibration = {servo_id:number,name:string,open_count:number,closed_count:n
 type Status = {mode:string,positions:Record<number,number>,target:Record<number,number>,stopped:boolean,playing:boolean,last_event:string,vision:{label:string,confidence:number,source:string}|null,devices:Record<string,string>}
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
+const servoMounts = [
+ {id:4,location:'Top left'}, {id:3,location:'Top right'},
+ {id:5,location:'Middle left'}, {id:2,location:'Middle right'},
+ {id:6,location:'Bottom left'}, {id:1,location:'Bottom right'},
+] as const
 const blank = ():Record<number,number>=>Object.fromEntries([1,2,3,4,5,6].map(id=>[id,0]))
 const initialStatus:Status={mode:'simulation',positions:blank(),target:blank(),stopped:false,playing:false,last_event:'Connecting',vision:null,devices:{controller:'Not connected',glasses:'Not connected',camera:'Browser preview only'}}
 async function api<T>(path:string,options?:RequestInit):Promise<T>{const response=await fetch('/api'+path,{headers:{'Content-Type':'application/json'},...options}); if(!response.ok){let message=`Request failed (${response.status})`;try{const error=await response.json();message=typeof error.detail==='string'?error.detail:JSON.stringify(error.detail)}catch{}throw Error(message)}return response.status===204?undefined as T:response.json()}
@@ -151,7 +156,7 @@ function CalibrationPage({cal,hardware,onReading,refresh,action}:{
   <div className="grid xl:grid-cols-2 gap-4">{draft.map(c=>{
    const live=hardware?.servos.find(servo=>servo.id===c.servo_id)
    return <div className="card p-5" key={c.servo_id}>
-    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><Pill tone={c.verified?'green':'amber'}>{c.verified?'Verified':'Unverified'}</Pill></div>
+    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id} · {servoMounts.find(mount=>mount.id===c.servo_id)?.location}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><Pill tone={c.verified?'green':'amber'}>{c.verified?'Verified':'Unverified'}</Pill></div>
     <div className="rounded-xl border border-[#e8ece8] bg-[#f8faf7] px-4 py-3 mb-4 flex flex-wrap justify-between gap-2 text-sm"><span className="text-[#63796a]">Latest position reading</span><b className="text-[#1e4937]">{live?.position==null?'No reading':`${live.position} counts`}</b></div>
     <div className="grid grid-cols-2 gap-3">{calibrationFields.map(([key,fingerLabel])=>{
      const label=c.servo_id>=5 && key==='open_count'?'Position A':c.servo_id>=5 && key==='closed_count'?'Position B':fingerLabel
@@ -171,7 +176,19 @@ function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|n
   {name:'Servo controller',state:controllerState,detail:'Read-only connection check',Icon:Cpu},
   {name:'Smart glasses',state:status.devices.glasses??'Not connected',detail:'Glasses camera connection',Icon:Camera},
  ]
- return <div className="space-y-5"><div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#839187] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div><div className="card p-5 max-w-[1040px]"><div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Positions are raw counts. Safe travel limits still need measurement.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>{hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}{hardware?.port&&<p className="text-xs text-[#839187] mt-4">Controller: {hardware.port}</p>}<div className="grid md:grid-cols-2 gap-2 mt-4">{servos.map((name,i)=>{const servo=hardware?.servos.find(s=>s.id===i+1);return <div key={name} className="rounded-xl border border-[#e8ece8] px-4 py-3 flex justify-between gap-3"><div><b className="text-sm">ID {i+1}</b><span className="text-xs text-[#839187] ml-2">{name}</span></div><div className="text-right text-xs text-[#63796a]">{servo?<><b className="text-[#1e4937]">{servo.position??'—'} counts</b><div>{servo.voltage_v?.toFixed(1)??'—'} V · {servo.temperature_c??'—'}°C</div><div>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`} · {servo.torque_enabled==null?'Torque unknown':servo.torque_enabled?'Torque on':'Torque off'}</div></>:<span>No response</span>}</div></div>})}</div><p className="text-xs text-[#839187] mt-4">Status reads do not move the glove. Manual controls and macros still run in simulation.</p></div></div>
+ return <div className="space-y-5">
+  <div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#839187] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div>
+  <div className="card p-5 max-w-[1040px]">
+   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; safe travel limits still need measurement.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
+   {hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}
+   {hardware?.port&&<p className="text-xs text-[#839187] mt-4">Controller: {hardware.port}</p>}
+   <div className="grid md:grid-cols-2 gap-2 mt-4">{servoMounts.map(({id,location})=>{
+    const servo=hardware?.servos.find(item=>item.id===id)
+    return <div key={id} className="rounded-xl border border-[#e8ece8] px-4 py-3 flex justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.12em] font-bold text-[#839187]">{location}</div><b className="text-sm">ID {id}</b><span className="text-xs text-[#839187] ml-2">{servos[id-1]}</span></div><div className="text-right text-xs text-[#63796a]">{servo?<><b className="text-[#1e4937]">{servo.position??'—'} counts</b><div>{servo.voltage_v?.toFixed(1)??'—'} V · {servo.temperature_c??'—'}°C</div><div>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`} · {servo.torque_enabled==null?'Torque unknown':servo.torque_enabled?'Torque on':'Torque off'}</div></>:<span>No response</span>}</div></div>
+   })}</div>
+   <p className="text-xs text-[#839187] mt-4">Status reads do not move the glove. Manual controls and macros still run in simulation.</p>
+  </div>
+ </div>
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>)

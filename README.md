@@ -4,16 +4,18 @@ A local, simulation-first control studio for a six-servo smart-glasses hand glov
 
 ## Servo map
 
-| ID | Movement |
-|---|---|
-| 1 | Pinky finger |
-| 2 | Ring finger |
-| 3 | Middle finger |
-| 4 | Index finger |
-| 5 | Thumb flexion (up/down) |
-| 6 | Thumb opposition (side to side) |
+| ID | Movement | Mount location in the user's photo |
+|---|---|---|
+| 1 | Pinky finger | Bottom right |
+| 2 | Ring finger | Middle right |
+| 3 | Middle finger | Top right |
+| 4 | Index finger | Top left |
+| 5 | Thumb flexion (up/down) | Middle left |
+| 6 | Thumb opposition (side to side) | Bottom left |
 
 This ID mapping was supplied by the glove builder after all six servos responded to a read-only status check. Earlier documents and app releases used a different order. Saved gestures are remapped once during database upgrade so their finger meaning stays the same; calibration counts remain attached to their physical servo IDs. The displayed calibration counts are still **unverified** placeholders, not commands or recommended physical limits.
+
+The mount locations were supplied later by the user, viewed with the glove above the two-column servo block. The white cords pass through holes in the round black servo horns and run toward the glove; this is an attached-tendon setup, so the unloaded bench jog is not appropriate as photographed.
 
 ## Run locally
 
