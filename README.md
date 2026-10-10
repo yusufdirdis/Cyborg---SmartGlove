@@ -50,7 +50,7 @@ On first launch, `backend/handos.sqlite3` is created with five editable sample p
 3. Choose **Play**. The Dashboard channel meters and WebSocket telemetry update as the six simulated channels move.
 4. Use **Stop** to latch the software stop; **Reset simulation** allows movement again.
 
-Manual Control has separate physical count controls and simulated percentage controls. Moving a physical target slider queues a motor command automatically; number fields queue when focus leaves or Enter is pressed. **Apply to simulation** still affects only the simulated pose. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
+Manual Control contains only live physical servo position and speed controls. Moving a target slider queues a motor command automatically; number fields queue when focus leaves or Enter is pressed. Saved macros still preview in simulation. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
 
 ## Read-only controller status
 
