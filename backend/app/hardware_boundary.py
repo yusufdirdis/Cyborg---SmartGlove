@@ -1,8 +1,7 @@
-"""Contract for a future Feetech/ST3215 driver. Not connected to API routes.
+"""Contract for future physical movement. Not connected to API control routes.
 
-Phase 1 intentionally contains no serial imports, port discovery, or motor writes.
-The future adapter must reuse the project's proven Feetech code and call this
-gate before every physical pose or sequence step.
+The read-only status route is separate. Before adding any motor writes, a
+physical transport must call this gate for every pose or sequence step.
 """
 from __future__ import annotations
 

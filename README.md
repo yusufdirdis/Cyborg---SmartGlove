@@ -1,6 +1,6 @@
 # handoff — Phase 1
 
-A local, simulation-first control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, and WebSocket telemetry.
+A local, simulation-first control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, and Devices sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, and a read-only servo status check.
 
 ## Servo map
 
@@ -50,16 +50,22 @@ On first launch, `backend/handos.sqlite3` is created with five editable sample p
 
 Manual Control changes a draft until **Apply to simulation** is pressed. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
 
+## Read-only controller status
+
+Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page shows each servo's raw readings and has a refresh button; it also refreshes automatically every 20 seconds. This status check never sends a position command. Manual controls and macros still move only the simulation.
+
+The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and common Feetech URT-1 adapters (`1A86:7523`). If there are multiple compatible adapters, set `HANDOFF_SERVO_PORT=/dev/cu.YOUR_PORT` before starting the API. The supplied [Feetech-tuna library](https://github.com/iotdesignshop/Feetech-tuna) is included under `backend/feetech_tuna` at commit `50eb1308f9ed490646f39dc58d7ff04c9f4d8eed`, with its [MIT license](backend/third_party_licenses/Feetech-tuna.LICENSE). `pyserial` is installed from `backend/requirements.txt`.
+
 ## Safety boundary
 
-Phase 1 has **no physical servo driver**, serial port access, or route that can switch to hardware mode. `backend/app/hardware_boundary.py` defines the future transport interface and a gate that requires:
+The app has a read-only serial status route, but **no route that can switch movement to hardware mode**. `backend/app/hardware_boundary.py` defines the future movement interface and a gate that requires:
 
 - Valid, measured and verified calibration for every servo in the pose.
 - A tested physical E-stop recorded for that session.
 - Explicit approval for that physical actuation.
 - No latched software stop; every mapped target inside measured limits.
 
-The physical E-stop must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop is useful for the app but cannot substitute for a power cut. Attach the glove's proven Feetech/ST3215 control code to `ServoTransport` only after reviewing its protocol, limits, torque behavior, and stop behavior. None was present in the supplied workspace, so no control code was copied or rewritten.
+The physical E-stop must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop is useful for the app but cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their movement commands are not connected to `ServoTransport`; mechanical limits, torque behavior, and stop behavior need review before any physical control is added.
 
 ## Checks
 
@@ -72,7 +78,7 @@ The first build passed with five backend tests. The UI was also opened in a brow
 
 ## Integration next steps
 
-1. Obtain the existing Feetech controller repository and identify its known-good read/write and torque-off functions. Keep it behind `ServoTransport`.
+1. Confirm the finger associated with each physical ID. The current read-only status check confirms IDs 1–6 respond; it does not prove their finger assignments.
 2. Measure each servo's open, closed, and hard limits unloaded; verify direction and speed per channel. Store those values in Calibration, then test the E-stop.
 3. Build a deliberate physical-arm flow that checks the gate before every pose or sequence step and requires a fresh confirmation for each action.
 4. Connect the glasses camera or object detector. Send real events to `POST /api/vision/detection` with `source: "external"`; add a reviewable object-to-macro mapping and user confirmation before allowing any resulting motion.

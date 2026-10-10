@@ -1,4 +1,4 @@
-"""handoff Phase 1 API. No physical servo transport is included or initialized."""
+"""handoff API. Physical status reads are separate from simulation control."""
 from __future__ import annotations
 
 import asyncio
@@ -203,6 +203,13 @@ def status():
 @app.get("/api/servos")
 def servos():
     return [{"id": sid, "name": name} for sid, name in SERVO_NAMES.items()]
+
+
+@app.get("/api/hardware/status")
+def hardware_status():
+    from .servo_status import scan_servos
+
+    return scan_servos()
 
 
 @app.get("/api/macros")

@@ -69,3 +69,40 @@ def test_future_hardware_gate_requires_every_condition():
     with pytest.raises(PermissionError):
         gated_counts(all_pose, {**all_cal, 6: c.model_copy(update={"verified": False})}, ActuationApproval(True, True), False)
     assert gated_counts(all_pose, all_cal, ActuationApproval(True, True), False)[1] == (500, 20)
+
+
+def test_read_only_hardware_status_uses_six_ids_and_never_writes(monkeypatch):
+    import feetech_tuna
+    from app import servo_status
+
+    calls = []
+
+    class Packet:
+        def ping(self, servo_id):
+            calls.append(("ping", servo_id))
+            return 777, 0, 0
+
+    class Driver:
+        packetHandler = Packet()
+
+        def openSerialPort(self, port, baudrate, servoFamily):
+            calls.append(("open", port, baudrate, servoFamily))
+            self.porthandler = type("Port", (), {"is_open": True})()
+            return True
+
+        def readReg(self, servo_id, address):
+            calls.append(("read", servo_id, address))
+            return {56: 1000 + servo_id, 62: 124, 63: 35, 66: 0}[address]
+
+        def closeSerialPort(self):
+            calls.append(("close",))
+
+    monkeypatch.setattr(servo_status, "_port", lambda: ("/dev/cu.test", None))
+    monkeypatch.setattr(feetech_tuna, "FeetechTuna", Driver)
+    with TestClient(app) as client:
+        response = client.get("/api/hardware/status")
+    assert response.status_code == 200
+    assert response.json()["connected"] is True
+    assert [servo["id"] for servo in response.json()["servos"]] == list(range(1, 7))
+    assert [entry[1] for entry in calls if entry[0] == "ping"] == list(range(1, 7))
+    assert calls[-1] == ("close",)
