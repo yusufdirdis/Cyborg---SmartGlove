@@ -143,10 +143,12 @@ class SimulationAdapter:
         self.task: asyncio.Task | None = None
         self.last_event = "Simulation ready"
         self.vision = None
+        # Read-only physical servo positions (raw counts) for the 3D hand.
+        self.physical = {"connected": False, "positions": {sid: None for sid in SERVO_NAMES}, "read_at": None, "error": None}
         self.listeners: set[WebSocket] = set()
 
     def snapshot(self):
-        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
+        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "physical": self.physical, "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
 
     async def broadcast(self):
         message = self.snapshot()
@@ -202,10 +204,39 @@ class SimulationAdapter:
 sim = SimulationAdapter()
 
 
+async def refresh_physical(read) -> dict | None:
+    """Store one read-only position reading and broadcast it if anything but its timestamp changed."""
+    reading = await asyncio.to_thread(read)
+    if reading is None:  # controller busy with a status check or move
+        return None
+    changed = {k: v for k, v in reading.items() if k != "read_at"} != {k: v for k, v in sim.physical.items() if k != "read_at"}
+    sim.physical = reading
+    if changed:
+        await sim.broadcast()
+    return reading
+
+
+async def poll_physical_positions():
+    from .live_positions import IDLE_INTERVAL_S, POLL_INTERVAL_S, read_positions
+
+    while True:
+        try:
+            reading = await refresh_physical(read_positions) if sim.listeners else None
+        except Exception as exc:  # keep polling; a USB hiccup must not end live updates
+            reading = None
+            sim.physical = {**sim.physical, "connected": False, "error": f"Live position read failed: {exc}"}
+        await asyncio.sleep(POLL_INTERVAL_S if reading and reading["connected"] else IDLE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from .live_positions import enabled as live_positions_enabled
+
     init_db()
+    poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
     yield
+    if poller:
+        poller.cancel()
     if sim.task and not sim.task.done():
         sim.task.cancel()
 

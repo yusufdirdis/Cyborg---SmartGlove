@@ -56,6 +56,10 @@ Manual Control contains only live physical servo position and speed controls. Mo
 
 Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros remain simulation only.
 
+### Live 3D hand
+
+The Dashboard's **YOUR GLOVE** panel shows a 3D model of the glove, built from photos of the real hardware: back and palm cord guides on every finger segment, both curved anchor blocks, cords and tubes. Drag to rotate; switching the **Simulated / Physical** toggle swings the view back to straight on. **Simulated** follows macro playback. **Physical** follows the real servos: while the website is open, the API reads the six present positions about 10 times a second (read-only, never a command, sharing the controller lock with moves and status checks) and maps each raw count to 0–100 % curl with that servo's saved open and closed counts. A **Calibration unverified** badge shows until those counts are measured. The thumb uses collision avoidance so it rests on top of curled fingers instead of passing through them. Set `HANDOFF_LIVE_POSITIONS=0` to turn the position reads off.
+
 The website does not expose a Calibration page. Existing measured servo limits remain stored in SQLite and are checked by live motor control. If limits need changing, update them through the local API after physically measuring the servo travel.
 
 ### Website hardware controls
