@@ -98,7 +98,7 @@ Structure top to bottom:
 1. **Brand row** — circular 44 px `#111816` icon tile with the lucide `Hand` icon (25 px, stroke 2), wordmark `handoff` + coral `.`; a close button exists but is hidden on desktop.
 2. **Section label** — `YOUR WORKSPACE` (10 px, `#9aa39d`, uppercase, letter-spaced).
 3. **Nav** — pill buttons, 13 px weight 700; inactive `#727d75`, hover `#edf1ed`/`#25352b`, active `#101714` on white. Icons are lucide at 18 px, stroke 1.9. The Dashboard item is labeled **Overview** (while the page title remains `handoff`). Macro Studio shows a circular count badge (22 px; active variant `#47554a`).
-4. **Bottom system block** — label `SYSTEM`, status dot (7 px; gray `#abb4aa`, online `#83a88a`), bold 11 px `Local API connected` / `API offline`, and a permanent 10 px line `Simulation mode · no hardware`.
+4. **Bottom system block** — label `SYSTEM`, status dot (7 px; gray `#abb4aa`, online `#83a88a`), bold 11 px `Local API connected` / `API offline`, and a permanent 10 px line `Simulation controls · no motor commands`.
 
 The sidebar is `position: sticky; top: 0; height: 100vh` with padding `37px 22px 24px`; a 74 px gap sits under the brand row.
 
@@ -217,8 +217,8 @@ Both panels end with a `.panel-note` honesty strip; the first one states that no
 
 ### 4.6 Devices
 
-- List of cards (two columns, ≤700 px one column): icon tile (`#edf6ef` bg, teal icon), device name, one-line detail, and a pill showing the raw `status.devices` string. A pill is green only when the state string is exactly `connected` (trimmed, lowercased).
-- Today the backend reports `Not connected` for controller and glasses; the browser camera is intentionally not listed here (it is a preview, not a glove-system device).
+- List of cards (two columns, ≤700 px one column): icon tile (`#edf6ef` bg, teal icon), device name, one-line detail, and a status pill. The servo controller pill uses the read-only `/api/hardware/status` result; it is green only when all six expected IDs respond with complete readings.
+- The Devices page shows live raw positions, voltage, and temperature for IDs 1–6, with a refresh button. Finger labels are planned assignments, not verified wiring. The smart glasses still report `Not connected`; the browser camera is intentionally not listed here.
 
 ---
 
@@ -281,7 +281,7 @@ All additions must reuse the tokens and components above. No new accent colors; 
 
 ## 8. Truthfulness and Known Issues
 
-### 8.1 Known correctness issue (documented, not fixed here)
+### 8.1 Hardware connection label
 
 Dashboard hardware pill (`main.tsx:65`):
 
@@ -293,16 +293,16 @@ Dashboard hardware pill (`main.tsx:65`):
 </div>
 ```
 
-The indicator and the accessible label derive from `hardwareConnected` (which is `status.devices.controller.trim().toLowerCase() === 'connected'`), but the **visible text is unconditionally "Hardware connected"**. Today the backend always reports `Not connected`, so the visible text is wrong.
+The indicator and the accessible label now derive from `hardware.connected` returned by `/api/hardware/status`. The visible text remains unconditionally "Hardware connected" as previously requested; the empty versus green circle conveys state. The green circle requires all six servos to respond.
 
-**Future fix (specified, not applied):** render the label text conditionally — `Hardware connected` / `Hardware disconnected` — keeping the same class names and layout so the styling is unchanged. Until then, do not describe the pill as accurate, and do not "fix" it as part of unrelated work.
+If this label is revisited, preserve the accepted layout while making the visible connection state explicit. The Devices page currently gives the accurate text state.
 
-Related coupling rule: device state strings must be exactly `connected` (case-insensitive, trimmed) to render as connected. New device states (e.g. `Fault`, `Awaiting approval`) require a deliberate mapping update, not ad-hoc string checks scattered through components.
+Related coupling rule: live controller status is a boolean derived from six complete read responses, while glasses status still uses a string. New device states (e.g. `Fault`, `Awaiting approval`) require a deliberate mapping update.
 
 ### 8.2 Truthful copy that must be preserved
 
-- Sidebar: `Simulation mode · no hardware`.
-- Dashboard panel note: no motor commands are sent; hardware remains disconnected.
+- Sidebar: `Simulation controls · no motor commands`.
+- Dashboard panel note: no motor commands are sent, even while the controller is connected for status reads.
 - Manual Control: percentages only; actual counts depend on measured open/closed values.
 - AI Vision: video stays in the browser; it is not analyzed; no detector is running.
 - Calibration: banner states values are unverified placeholders and that the E-stop must be tested before any hardware adapter is enabled.

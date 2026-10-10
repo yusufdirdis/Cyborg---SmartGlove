@@ -37,10 +37,10 @@ Status labels used throughout:
 
 The project has two distinct halves, and they must not be conflated:
 
-1. **A physical glove prototype (team-reported, separately built).** The team reports that finger movement works and that wrist hardware is still in development. This prototype's controller code is not in this repository. Untrusted details about it (servo IDs, wiring, controller firmware) must be confirmed before integration.
-2. **This repository — a simulation-first control studio [Implemented].** It models six finger channels, stores macros and calibration, broadcasts simulated telemetry, and defines a safety gate for a future hardware driver. It contains **no physical servo driver, no serial or port access, and no route that can switch to hardware mode**. That is deliberate for Phase 1.
+1. **A physical glove prototype (team-reported, separately built).** The team reports that finger movement works and that wrist hardware is still in development. Two controller test scripts are saved in `hardware/reference`; the Feetech-tuna library is included under `backend/feetech_tuna`. Finger assignments, wiring, and physical limits still need confirmation.
+2. **This repository — a simulation-first control studio [Implemented].** It models six finger channels, stores macros and calibration, broadcasts simulated telemetry, and defines a safety gate for a future movement driver. It now has a **read-only** serial status route for IDs 1–6. There is **no route that can switch movement to hardware mode**.
 
-The next physical milestone is **inspecting and integrating the prototype's existing controller code through the safety boundary** (§5), not writing a new driver from scratch.
+The next physical milestone is **confirming the ID-to-finger mapping and measuring safe limits off-body**, then integrating guarded movement through the safety boundary (§5).
 
 Stack:
 
@@ -51,7 +51,7 @@ Stack:
 | Persistence | SQLite via the `sqlite3` standard library | Implemented |
 | Persistence (target) | One new table in the existing Resume Fit Supabase (Postgres) project | Proposed |
 | Telemetry | WebSocket `/ws/telemetry`, full-snapshot broadcasts | Implemented |
-| Hardware path | None in this repository | Required before physical testing |
+| Hardware path | Read-only status for IDs 1–6; no physical movement path | Movement remains gated |
 
 Views already present in the UI: **Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices**.
 
@@ -70,7 +70,7 @@ The following categories must never be merged in future documentation or demos:
 |---|---|
 | **Team-reported capability** | Finger movement works on the physical glove; wrist hardware is in development. Not independently verified here. |
 | **Visual observation (video, ~51 s)** | A worn glove with finger guides, tendon routing, and a forearm-mounted actuator assembly; early frames show relatively extended fingers beside a can; later frames show fingers curled around the can; manual line adjustments and wearer participation are visible. |
-| **Verified measurement** | **None recorded.** The clip does not establish independent servo-driven movement, verified calibration, unsupported grasp performance, or a controlled wrist actuation cycle. |
+| **Verified measurement** | A read-only serial scan found IDs 1–6 responding at roughly 999–1004 counts, 12.4–12.5 V, and 33–38 °C, with no servo reporting motion at the time. These are status readings, not calibration or proof of controlled grasp. |
 
 No statement in this document or in the UI may present team-reported or observed behavior as measured performance. Calibration values remain unverified placeholders until measured (§5).
 
@@ -83,7 +83,7 @@ No statement in this document or in the UI may present team-reported or observed
 
 ### 1.5 Explicit non-goals for phase 1
 
-- No real servo writes, serial access, or hardware mode switch.
+- No real servo writes or hardware movement mode. Read-only serial status is implemented.
 - No autonomy: vision detections, AI text commands, or voice input may never bypass human confirmation and the safety gate (§6).
 - No claim that placeholder calibration values are safe or measured.
 - No wrist channel assignment until wrist hardware has its own specification (§2.4).
@@ -585,7 +585,7 @@ Field notes:
 | `playing` | A playback task is active. |
 | `last_event` | Human-readable status line. |
 | `vision` | Latest detection `{label, confidence, source, received_at}` or `null`. |
-| `devices` | Static strings today: controller `"Not connected"`, glasses `"Not connected"`, camera `"Browser preview only"`. |
+| `devices` | Static strings in the simulation snapshot: controller `"Not connected"`, glasses `"Not connected"`, camera `"Browser preview only"`. Live controller readings come separately from `/api/hardware/status`. |
 
 JSON channel keys are **strings** on the wire; the frontend relies on JavaScript object-key access (`positions[i+1]`).
 
@@ -629,7 +629,7 @@ Failures raise `PermissionError` (safety conditions) or `ValueError` (percentage
 - **Approval booleans are reusable.** `ActuationApproval` is a frozen dataclass with two booleans; nothing consumes or invalidates it. One-use behavior is not enforced.
 - **Session verification/evidence is not persisted.** "E-stop tested this session" is an in-memory assertion with no record of who, when, or how.
 - **Calibration verification is operator-asserted.** `verified: true` is a checkbox, not a measurement record.
-- **The gate is not connected to physical execution.** No route calls it; no driver exists.
+- **The gate is not connected to physical execution.** No movement route calls it. A separate read-only status adapter exists.
 - **Driver behavior is unverified.** Speed units, torque behavior on stop, and what `disable_torque()` actually does are unknown until the prototype controller is inspected.
 
 ### 5.4 Required future behavior [Required before physical testing]
@@ -702,7 +702,7 @@ Ordered phases. Status labels: **[Implemented]**, **[Proposed]**, **[Required be
 
 ### Phase 1 — Simulation studio [Implemented]
 
-Six-channel simulation with interpolation; macro CRUD with export/import; SQLite persistence; software stop latch; WebSocket telemetry; six views (Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices); `ServoTransport` contract and `gated_counts()` defined but unwired.
+Six-channel simulation with interpolation; macro CRUD with export/import; SQLite persistence; software stop latch; WebSocket telemetry; six views (Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices); read-only servo status; `ServoTransport` contract and `gated_counts()` defined but unwired for movement.
 
 ### Phase 2 — Persistence migration and simulation hardening [Proposed]
 

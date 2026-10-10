@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-"handoff" (DB/env names still use the older "handos") is a simulation-first control studio for a six-servo smart glove. A FastAPI backend simulates six servo channels and persists macros and calibration in SQLite. A single-file React 19 + TypeScript + Tailwind 3 UI drives it. **Phase 1 has no physical hardware path. This is deliberate. Keep it that way unless the user asks for one.**
+"handoff" (DB/env names still use the older "handos") is a simulation-first control studio for a six-servo smart glove. A FastAPI backend simulates six servo channels and persists macros and calibration in SQLite. A single-file React 19 + TypeScript + Tailwind 3 UI drives it. The user connected the controller and authorized a status check, so the app now has a **read-only** USB servo status route. All movement controls remain simulation-only.
 
 ## Commands
 
@@ -42,6 +42,7 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
 - **`backend/app/hardware_boundary.py`** defines the future hardware contract. It is intentionally *not* wired to any route.
   - It contains the `ServoTransport` protocol and `gated_counts()`.
   - `gated_counts()` maps 0–100 % poses to servo counts. It refuses unless every servo is verified-calibrated, a physical E-stop has been tested, explicit approval was given, no software stop is latched, and every target is within the measured limits.
+- **`backend/app/servo_status.py`** uses the supplied Feetech-tuna library to ping and read IDs 1–6. `/api/hardware/status` opens the port for one read-only scan, then closes it. The Devices page displays the readings; this route has no motor writes.
 - **`frontend/src/main.tsx`** contains the entire UI: types, the `api()` fetch helper, `App`, and every page component (Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices).
   - The components are dense one-liners. Match that style rather than splitting files unless asked.
   - The TS types in this file mirror the Pydantic models by hand. Keep the two in sync when either one changes.
@@ -58,7 +59,7 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
   
   The seeded values are placeholders and are marked unverified.
 - Vision detections (`POST /api/vision/detection`) only record the event. They must **never** trigger motion, and a test enforces this.
-- Do not add serial/port access, a hardware mode switch, or real servo writes on your own initiative. Any future driver goes behind `ServoTransport` and must call `gated_counts()` before every physical step. See the README's "Safety boundary" and "Integration next steps".
+- The read-only serial status route is authorized and implemented. Do not enable real servo writes or a hardware movement mode without a reviewed physical control path. Any future movement driver goes behind `ServoTransport` and must call `gated_counts()` before every physical step. See the README's "Safety boundary" and "Integration next steps".
 
 ## Tests
 
