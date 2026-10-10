@@ -1,0 +1,65 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+"handoff" (DB/env names still use the older "handos") is a simulation-first control studio for a six-servo smart glove. A FastAPI backend simulates six servo channels and persists macros and calibration in SQLite. A single-file React 19 + TypeScript + Tailwind 3 UI drives it. **Phase 1 has no physical hardware path. This is deliberate. Keep it that way unless the user asks for one.**
+
+## Commands
+
+Backend (Python 3.11+). Run from `backend/`:
+
+```bash
+python -m venv .venv
+.venv/Scripts/activate          # Windows; use .venv/bin/activate on macOS/Linux
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m pytest -q                                   # all tests
+python -m pytest -q tests/test_api.py::test_telemetry_connects   # single test
+```
+
+Frontend (Node 20+). Run from `frontend/`:
+
+```bash
+npm install
+npm run dev -- --port 5173     # Vite proxies /api and /ws to 127.0.0.1:8000
+npm run build                  # tsc -b && vite build; this doubles as the type check
+```
+
+There is no linter or frontend test suite. Run both servers at once. The UI is served at http://127.0.0.1:5173 and the API docs at http://127.0.0.1:8000/docs.
+
+## Architecture
+
+- **`backend/app/main.py`** holds the whole API: the Pydantic models (`Pose`, `Step`, `MacroInput`, `CalibrationInput`), the SQLite helpers, the `SimulationAdapter`, and all routes.
+  - The SQLite DB path comes from the `HANDOS_DB` env var. The default is `backend/handos.sqlite3`, which is gitignored. `init_db()` runs in the lifespan hook and seeds five sample poses plus six unverified calibration rows.
+  - Macros store `steps` as a JSON text column. Calibration stores each servo's `CalibrationInput` as a JSON blob.
+- **`SimulationAdapter`** is a module-level singleton named `sim`.
+  - It interpolates positions in 50 ms ticks and broadcasts a full `snapshot()` to every WebSocket listener on each tick.
+  - Only one playback task runs at a time (`sim.task`). A new play or pose cancels the current one.
+  - The software stop latches. While it is latched, movement routes return 409 until `/api/control/reset` is called.
+- **Telemetry**: `/ws/telemetry` pushes the snapshot dict. The frontend replaces its whole `Status` state on each message and reconnects every 2.5 s.
+- **`backend/app/hardware_boundary.py`** defines the future hardware contract. It is intentionally *not* wired to any route.
+  - It contains the `ServoTransport` protocol and `gated_counts()`.
+  - `gated_counts()` maps 0–100 % poses to servo counts. It refuses unless every servo is verified-calibrated, a physical E-stop has been tested, explicit approval was given, no software stop is latched, and every target is within the measured limits.
+- **`frontend/src/main.tsx`** contains the entire UI: types, the `api()` fetch helper, `App`, and every page component (Dashboard, Manual Control, Macro Studio, AI Vision, Calibration, Devices).
+  - The components are dense one-liners. Match that style rather than splitting files unless asked.
+  - The TS types in this file mirror the Pydantic models by hand. Keep the two in sync when either one changes.
+
+## Domain invariants
+
+- There are exactly six servos, with IDs 1–6: index, middle, thumb flexion, thumb opposition, ring, pinky. Every pose must include all six as integer percentages from 0 to 100. JSON keys arrive as strings and Pydantic coerces them.
+- A sequence has 1–30 steps, each lasting 100–10,000 ms. A `pose` macro has exactly one step.
+- Calibration counts run from 0 to 4095. The constraints are:
+  - min < max
+  - open and closed both fall within [min, max]
+  - |closed − open| ≥ 10
+  - `direction` matches the sign of closed − open
+  
+  The seeded values are placeholders and are marked unverified.
+- Vision detections (`POST /api/vision/detection`) only record the event. They must **never** trigger motion, and a test enforces this.
+- Do not add serial/port access, a hardware mode switch, or real servo writes on your own initiative. Any future driver goes behind `ServoTransport` and must call `gated_counts()` before every physical step. See the README's "Safety boundary" and "Integration next steps".
+
+## Tests
+
+`backend/tests/test_api.py` sets `HANDOS_DB` to `tests/test.sqlite3` before it imports the app. That file persists between runs and is gitignored. The tests use `TestClient(app)` as a context manager so the lifespan hook (`init_db`) runs.
