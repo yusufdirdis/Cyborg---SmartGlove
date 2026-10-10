@@ -433,6 +433,44 @@ def execute_group(token: str, phrase: str, *, off_body: bool, power_cut_tested: 
     ], "message": "One synchronized packet sent. Watch every selected servo and use the physical power cutoff if needed."}
 
 
+def move_live(moves: list[tuple[int, int, int]], calibrations: dict[int, object], stopped: bool,
+              is_stopped: Callable[[], bool] | None = None) -> dict:
+    """Send edited targets in one packet, including while a previous target is settling."""
+    ids = [servo_id for servo_id, _, _ in moves]
+    if not 1 <= len(moves) <= 6 or len(set(ids)) != len(ids) or any(
+        servo_id not in range(1, 7) or not 0 <= target <= 4000 or
+        not POSITION_SPEED_MIN <= speed <= POSITION_SPEED_MAX
+        for servo_id, target, speed in moves
+    ):
+        raise HardwareControlError("Choose distinct servos with targets 0–4000 and speeds 50–2400.")
+    if not writes_enabled() or stopped:
+        raise HardwareControlError("Physical movement is disabled or software stop is latched.")
+    try:
+        with _driver(lock_timeout=2.0) as driver:
+            for servo_id, target, _ in moves:
+                snapshot = read_snapshot(driver, servo_id)
+                # A live edit can arrive while the last goal is in progress, so
+                # the stored goal and moving flag are intentionally not a block.
+                if snapshot.model != 777 or snapshot.mode != 0 or snapshot.torque_enabled != 1:
+                    raise HardwareControlError(f"Servo {servo_id} is unavailable for position control.")
+                if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
+                    raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
+                if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
+                    raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
+                if snapshot.position is None:
+                    raise HardwareControlError(f"Servo {servo_id} position is unavailable.")
+                _check_calibration(calibrations[servo_id], snapshot.position, target)
+            if is_stopped and is_stopped():
+                raise HardwareControlError("Software stop was pressed. No move was sent.")
+            FeetechServoTransport(driver).write_positions_together(moves)
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    return {"accepted": True, "moves": [
+        {"servo_id": servo_id, "target": target, "speed": speed}
+        for servo_id, target, speed in moves
+    ]}
+
+
 def disable_torque() -> dict:
     """Best-effort software stop. The independent power cutoff is still essential."""
     clear_pending()

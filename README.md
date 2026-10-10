@@ -50,7 +50,7 @@ On first launch, `backend/handos.sqlite3` is created with five editable sample p
 3. Choose **Play**. The Dashboard channel meters and WebSocket telemetry update as the six simulated channels move.
 4. Use **Stop** to latch the software stop; **Reset simulation** allows movement again.
 
-Manual Control has separate physical count controls and simulated percentage controls. Moving a physical slider only changes its draft target; it never sends a command until a move is checked and confirmed. **Apply to simulation** still affects only the simulated pose. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
+Manual Control has separate physical count controls and simulated percentage controls. Moving a physical target slider queues a motor command automatically; number fields queue when focus leaves or Enter is pressed. **Apply to simulation** still affects only the simulated pose. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
 
 ## Read-only controller status
 
@@ -60,13 +60,13 @@ Calibration shows each servo's latest raw position. **Capture current position**
 
 ### Website hardware controls
 
-**Manual Control → Servo positions** has a separate raw-count target and speed for each of the six servos. The target slider is constrained by that servo's saved measured direct-test limits. Each channel has a speed setting from **50 to 2400 counts per second**; the default is **500**, and choices are saved in this browser. Choose a target and speed, select **Check move** for one servo, or check two to six servos and select **Check group move**. Review every current and target count, confirm that the glove is off-body, cord paths are clear, and the independent power cutoff was tested and is within reach, then select **Confirm move**. The preview expires after 30 seconds and can be executed once. The backend rereads model, mode, voltage, temperature, torque, stored goal, position, and movement state before writing. It checks every servo is stopped and revalidates selected servos' saved limits. Group moves queue selected targets into one Feetech `SyncWritePosEx` packet, then send it once. Manual Control polls selected servos' positions during motion; **Stop** attempts torque-off, while the physical power cutoff is the reliable emergency stop. No move returns automatically.
+**Manual Control → Live servo positions** has a raw-count target and speed for each servo. The target slider is constrained by saved measured direct-test limits. Speeds range from **50 to 2400 counts per second**, default **500**. Editing a slider or finishing a number-field edit queues that target; edits within 900 ms are combined into one `SyncWritePosEx` packet. Further edits wait for the current serial request, then send the latest queued targets. There is no group selection button or confirmation form. This is live physical control when hardware writes are enabled. The API still checks each selected servo's model, position mode, torque, voltage, temperature, current position, and saved travel limits, and rejects commands while software Stop is latched. A new target may be sent while a previous movement is settling. The physical power cutoff remains the reliable emergency stop. No move returns automatically.
 
 On 2026-10-10, a supervised terminal test sent one Servo 1 command from 1004 to 1250 at requested speed 2400 and acceleration 50. It settled at 1248 in about 0.5 seconds. This does not establish the speed or safe travel of other channels or simultaneous moves. Start at a lower setting for channels whose response has not been observed. The manufacturer's [STS3215 specifications](https://www.feetechrc.com/525603.html) describe the servo's 12 V position control and higher no-load speed; 2400 is a requested controller speed, not a guarantee of actual glove speed.
 
 **Devices → Small movement test** connects the terminal bench test's read-only preflight to the website. Select one servo and either +10 or −10 counts, then choose **Check move**. The website reads the actual servo and shows the current count and proposed target. This preview never sends a motor command. It checks the ST3215 model, position mode, torque state, stored target, voltage, temperature, moving state, and count margins through the supplied Feetech library.
 
-Physical writes are **off by default**. After attached cords' safe direct-test limits have been measured off-body for each selected servo, those bounds are saved and checked in Calibration, and the physical power cutoff is tested for that session, the local API can be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1`. Only then can a preview offer a 30-second, one-use confirmation for a single direct position move, a synchronized group move, or one 10-count test. Confirmation checks that the glove is off-body, cord paths are clear, and the physical power cutoff was tested; the backend re-reads selected servos and rejects changed position, calibration, or status before writing. It never enables torque automatically, returns home, or connects saved macros to real motors.
+Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits to move motors. Saved measured limits and device-health checks remain enforced for every edited servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors. The separate Devices small-step test retains its own confirmation flow.
 
 When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
 
@@ -86,12 +86,7 @@ The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and commo
 
 ## Safety boundary
 
-The percentage sliders, saved gestures, and vision events remain **simulation only**. Manual Control's raw-count position controls (single and group) and Devices' 10-count test are the physical movement routes, all locked by default. They use `gated_target_count()` and `gated_jog_count()` before motor writes. Future six-servo pose and sequence playback must use `gated_counts()` before every step. These gates require:
-
-- Valid, measured and verified calibration for the selected servo (or every servo in a future full pose).
-- A tested physical E-stop recorded for that session.
-- Explicit approval for that physical actuation.
-- No latched software stop; every mapped target inside measured limits.
+The percentage sliders, saved gestures, and vision events remain **simulation only**. Manual Control's raw-count targets are live physical controls when writes are enabled; Devices' 10-count test is a separate confirmed movement route. The live route checks saved travel bounds, position mode, torque, voltage, temperature, and Stop before every sync packet. The UI has no per-move confirmation, so edit physical targets only with the glove off-body and the independent power cutoff ready.
 
 The physical power cutoff must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their broad movement commands are not exposed by the website.
 

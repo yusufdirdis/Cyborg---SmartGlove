@@ -302,3 +302,38 @@ def test_group_api_previews_then_sends_one_packet(fake_controller, monkeypatch, 
         sent = client.post("/api/hardware/group/execute", json=confirmation)
         assert sent.status_code == 200 and sent.json()["accepted"] is True
     assert len([call for call in fake_controller if call[0] == "sync_packet"]) == 1
+
+
+def test_live_edits_share_one_packet_without_a_confirmation_token(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibrations = {1: measured_calibration(), 2: measured_calibration()}
+    result = control.move_live([(1, 1050, 2400), (2, 1060, 1200)], calibrations, False)
+    assert result["accepted"] is True
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", ((1, 1050, 2400, 50), (2, 1060, 1200, 50)))
+    ]
+
+
+def test_live_edit_blocks_unmeasured_target_and_stop_before_packet(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibrations = {1: measured_calibration(), 2: measured_calibration()}
+    with pytest.raises(control.HardwareControlError, match="outside"):
+        control.move_live([(1, 1050, 2400), (2, 2000, 1200)], calibrations, False)
+    with pytest.raises(control.HardwareControlError, match="stop"):
+        control.move_live([(1, 1050, 2400)], calibrations, False, is_stopped=lambda: True)
+    assert not any(call[0] == "sync_packet" for call in fake_controller)
+
+
+def test_live_api_sends_selected_targets_without_confirmation(fake_controller, monkeypatch, tmp_path):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "live.sqlite3")
+    with TestClient(app) as client:
+        for servo_id in (1, 2):
+            assert client.put(f"/api/calibration/{servo_id}", json=measured_calibration().model_dump()).status_code == 200
+        payload = {"moves": [{"servo_id": 1, "target": 1050, "speed": 2400},
+                             {"servo_id": 2, "target": 1060, "speed": 1200}]}
+        response = client.post("/api/hardware/live", json=payload)
+        assert response.status_code == 200 and response.json()["accepted"] is True
+        foreign = client.post("/api/hardware/live", json=payload, headers={"Origin": "https://other.example"})
+        assert foreign.status_code == 403
+    assert len([call for call in fake_controller if call[0] == "sync_packet"]) == 1
