@@ -32,6 +32,8 @@ def gated_counts(percentages: dict[int, int], calibration: dict[int, Calibration
         c = calibration[sid]
         if not c.verified:
             raise PermissionError(f"Servo {sid} has not been calibrated")
+        if (c.open_count, c.closed_count) == (2048, 2448):
+            raise PermissionError(f"Servo {sid} still has starter open and closed values")
         p = percentages[sid]
         if not 0 <= p <= 100:
             raise ValueError("Pose percentage outside 0–100")
@@ -49,10 +51,8 @@ def gated_jog_count(start: int, target: int, calibration: CalibrationInput,
         raise PermissionError("Software stop is latched")
     if not approval.approved or not approval.physical_estop_tested_this_session:
         raise PermissionError("Fresh confirmation and a tested physical power cutoff are required")
-    if not calibration.verified:
-        raise PermissionError("Servo limits are not verified")
-    if (calibration.open_count, calibration.closed_count, calibration.min_count, calibration.max_count) == (2048, 2448, 1800, 2600):
-        raise PermissionError("Starter calibration values are placeholders")
+    if not calibration.jog_limits_verified:
+        raise PermissionError("Direct-test limits are not verified")
     if abs(target - start) != 10:
         raise PermissionError("Only a single 10-count step is allowed")
     if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):

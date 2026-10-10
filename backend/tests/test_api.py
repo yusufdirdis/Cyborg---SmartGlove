@@ -89,6 +89,10 @@ def test_calibration_gate_and_vision_never_moves():
         assert client.put("/api/calibration/1", json=bad).status_code == 422
         good = {**bad, "min_count": 250}
         assert client.put("/api/calibration/1", json=good).status_code == 200
+        too_high = {**good, "max_count": 4001}
+        assert client.put("/api/calibration/1", json=too_high).status_code == 422
+        at_cap = {**good, "max_count": 4000}
+        assert client.put("/api/calibration/1", json=at_cap).status_code == 200
         before = client.get("/api/status").json()["positions"]
         result = client.post("/api/vision/detection", json={"label": "bottle", "confidence": .9, "source": "demo"})
         assert result.json()["action"] == "none"
@@ -114,6 +118,10 @@ def test_future_hardware_gate_requires_every_condition():
     with pytest.raises(PermissionError):
         gated_counts(all_pose, {**all_cal, 6: c.model_copy(update={"verified": False})}, ActuationApproval(True, True), False)
     assert gated_counts(all_pose, all_cal, ActuationApproval(True, True), False)[1] == (500, 20)
+    placeholders = c.model_copy(update={"open_count": 2048, "closed_count": 2448,
+                                        "min_count": 0, "max_count": 4000})
+    with pytest.raises(PermissionError, match="starter"):
+        gated_counts(all_pose, {**all_cal, 1: placeholders}, ActuationApproval(True, True), False)
 
 
 def test_read_only_hardware_status_uses_six_ids_and_never_writes(monkeypatch):

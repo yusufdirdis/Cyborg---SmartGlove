@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
+MAX_SERVO_COUNT = 4000  # User-requested app cap; not a measured mechanical limit.
 # The first release used index, middle, thumb flexion, thumb opposition, ring,
 # pinky for IDs 1–6. Preserve each finger's pose when upgrading saved macros.
 LEGACY_TO_CURRENT_ID = {1: 4, 2: 3, 3: 5, 4: 6, 5: 2, 6: 1}
@@ -63,13 +64,14 @@ class MacroInput(BaseModel):
 
 
 class CalibrationInput(BaseModel):
-    open_count: int = Field(ge=0, le=4095)
-    closed_count: int = Field(ge=0, le=4095)
-    min_count: int = Field(ge=0, le=4095)
-    max_count: int = Field(ge=0, le=4095)
+    open_count: int = Field(ge=0, le=MAX_SERVO_COUNT)
+    closed_count: int = Field(ge=0, le=MAX_SERVO_COUNT)
+    min_count: int = Field(ge=0, le=MAX_SERVO_COUNT)
+    max_count: int = Field(ge=0, le=MAX_SERVO_COUNT)
     direction: Literal["increasing", "decreasing"]
     speed: int = Field(ge=1, le=100)
     verified: bool = False
+    jog_limits_verified: bool = False
 
     @model_validator(mode="after")
     def valid_limits(self):
@@ -116,7 +118,7 @@ def init_db():
             for name, description, values in samples:
                 save_macro(conn, MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, values)), duration_ms=700)]))
         for sid in SERVO_NAMES:
-            conn.execute("INSERT OR IGNORE INTO calibration VALUES (?,?)", (sid, json.dumps({"open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": False})))
+            conn.execute("INSERT OR IGNORE INTO calibration VALUES (?,?)", (sid, json.dumps({"open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": False, "jog_limits_verified": False})))
 
 
 def save_macro(conn, macro: MacroInput, macro_id: str | None = None):

@@ -97,10 +97,8 @@ def pending_servo_id(token: str) -> int | None:
 
 
 def _check_calibration(calibration, start: int, target: int) -> None:
-    if not calibration.verified:
-        raise HardwareControlError("Measure and verify this servo's limits in Calibration first.")
-    if (calibration.open_count, calibration.closed_count, calibration.min_count, calibration.max_count) == (2048, 2448, 1800, 2600):
-        raise HardwareControlError("The starter calibration values are placeholders. Record measured limits first.")
+    if not calibration.jog_limits_verified:
+        raise HardwareControlError("Confirm this servo's measured direct-test limits in Calibration first.")
     if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):
         raise HardwareControlError("The current position or proposed target is outside this servo's measured limits.")
 

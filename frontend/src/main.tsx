@@ -6,11 +6,12 @@ import './index.css'
 type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'Calibration'|'Devices'
 type Step = {positions: Record<number,number>,duration_ms:number}
 type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[]}
-type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean}
+type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
 type Status = {mode:string,positions:Record<number,number>,target:Record<number,number>,stopped:boolean,playing:boolean,last_event:string,vision:{label:string,confidence:number,source:string}|null,devices:Record<string,string>}
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
 type JogPreview = {servo_id:number,start:number,target:number,delta:number,can_execute:boolean,blocked_reason:string|null,token?:string,phrase?:string,expires_in_seconds?:number}
 const servos = ['Pinky finger','Ring finger','Middle finger','Index finger','Thumb flexion (up/down)','Thumb side-to-side']
+const maxServoCount = 4000
 const servoMounts = [
  {id:4,location:'Top left'}, {id:3,location:'Top right'},
  {id:5,location:'Middle left'}, {id:2,location:'Middle right'},
@@ -58,7 +59,7 @@ function App(){
   </div>
  </div>
 }
-const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Shape each finger and preview the motion in simulation.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record measured limits before any future hardware connection.',Devices:'See live servo status and check small movement commands.'}
+const subtitles:Record<Page,string>={Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Shape each finger and preview the motion in simulation.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.',Calibration:'Record direct-test limits and gesture positions separately.',Devices:'See live servo status and check small movement commands.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 function HandGraphic(){
@@ -126,7 +127,7 @@ function CalibrationPage({cal,hardware,onReading,refresh,action}:{
  const [draft,setDraft]=useState<Calibration[]>([])
  const [capturing,setCapturing]=useState<string|null>(null)
  useEffect(()=>setDraft(cal.map(c=>({...c}))),[cal])
- const change=(id:number,patch:Partial<Calibration>)=>setDraft(current=>current.map(c=>c.servo_id===id?{...c,...patch,verified:false}:c))
+ const change=(id:number,patch:Partial<Calibration>)=>setDraft(current=>current.map(c=>c.servo_id===id?{...c,...patch,verified:false,jog_limits_verified:'min_count' in patch||'max_count' in patch?false:c.jog_limits_verified}:c))
  const capture=async(id:number,key:CalibrationCountField,label:string)=>{
   const captureId=`${id}-${key}`
   setCapturing(captureId)
@@ -136,7 +137,7 @@ function CalibrationPage({cal,hardware,onReading,refresh,action}:{
     onReading(reading)
     const servo=reading.servos.find(item=>item.id===id)
     const position=servo?.position
-    if(!servo || typeof position!=='number' || !Number.isInteger(position) || position<0 || position>4095){
+    if(!servo || typeof position!=='number' || !Number.isInteger(position) || position<0 || position>maxServoCount){
      throw Error(reading.error || `No valid position reading from Servo ${id}. Check its connection and retry.`)
     }
     if(servo.moving!==false)throw Error(`Servo ${id} may be moving. Wait until it is still, then retry.`)
@@ -152,20 +153,21 @@ function CalibrationPage({cal,hardware,onReading,refresh,action}:{
  return <>
   <div className="rounded-2xl p-5 mb-5 bg-[#fff6df] border border-[#f0e3ba] text-[#7b652e] flex gap-3">
    <ShieldCheck size={22} className="shrink-0"/>
-   <div className="text-sm leading-6"><b>Measure before verifying.</b> The saved starting values are placeholders. Capture only reads the current servo position into this form; it does not move a motor or save calibration. Work off-body, do not force a powered servo, and check travel limits and an independent power stop before future physical control.</div>
+   <div className="text-sm leading-6"><b>Measure before verifying.</b> The app accepts raw counts from 0 to 4000. Direct-test limits and open/closed positions are checked separately. The starting values are placeholders. Capture reads the current position; it does not move a motor or save calibration.</div>
   </div>
   <div className="grid xl:grid-cols-2 gap-4">{draft.map(c=>{
    const live=hardware?.servos.find(servo=>servo.id===c.servo_id)
    return <div className="card p-5" key={c.servo_id}>
-    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id} · {servoMounts.find(mount=>mount.id===c.servo_id)?.location}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><Pill tone={c.verified?'green':'amber'}>{c.verified?'Verified':'Unverified'}</Pill></div>
+    <div className="flex justify-between items-center mb-5"><div><Eyebrow>Servo 0{c.servo_id} · {servoMounts.find(mount=>mount.id===c.servo_id)?.location}</Eyebrow><h2 className="font-bold text-lg mt-1">{c.name}</h2></div><div className="flex flex-wrap gap-1 justify-end"><Pill tone={c.jog_limits_verified?'green':'amber'}>{c.jog_limits_verified?'Test limits checked':'Test limits unverified'}</Pill><Pill tone={c.verified?'green':'gray'}>{c.verified?'Gestures calibrated':'Gestures uncalibrated'}</Pill></div></div>
     <div className="rounded-xl border border-[#e8ece8] bg-[#f8faf7] px-4 py-3 mb-4 flex flex-wrap justify-between gap-2 text-sm"><span className="text-[#63796a]">Latest position reading</span><b className="text-[#1e4937]">{live?.position==null?'No reading':`${live.position} counts`}</b></div>
     <div className="grid grid-cols-2 gap-3">{calibrationFields.map(([key,fingerLabel])=>{
      const label=c.servo_id>=5 && key==='open_count'?'Position A':c.servo_id>=5 && key==='closed_count'?'Position B':fingerLabel
      const inputId=`servo-${c.servo_id}-${key}`
-     return <div key={key} className="min-w-0"><label htmlFor={inputId} className="text-xs font-bold text-[#6b7f72]">{label}</label><input id={inputId} className="field mt-1" type="number" min="0" max="4095" value={c[key]} onChange={e=>change(c.servo_id,{[key]:Number(e.target.value)})}/><button type="button" className="text-xs font-bold text-teal mt-2 disabled:opacity-50" disabled={capturing!==null} onClick={()=>capture(c.servo_id,key,label)} aria-label={`Capture ${label.toLowerCase()} for Servo ${c.servo_id}`}>{capturing===`${c.servo_id}-${key}`?'Reading…':'Capture current position'}</button></div>
+     return <div key={key} className="min-w-0"><label htmlFor={inputId} className="text-xs font-bold text-[#6b7f72]">{label}</label><input id={inputId} className="field mt-1" type="number" min="0" max={maxServoCount} value={c[key]} onChange={e=>change(c.servo_id,{[key]:Math.min(maxServoCount,Math.max(0,Number(e.target.value)))})}/><button type="button" className="text-xs font-bold text-teal mt-2 disabled:opacity-50" disabled={capturing!==null} onClick={()=>capture(c.servo_id,key,label)} aria-label={`Capture ${label.toLowerCase()} for Servo ${c.servo_id}`}>{capturing===`${c.servo_id}-${key}`?'Reading…':'Capture current position'}</button></div>
     })}</div>
     <div className="grid grid-cols-2 gap-3 mt-4"><label className="text-xs font-bold text-[#6b7f72]">Position direction<select className="field mt-1" value={c.direction} onChange={e=>change(c.servo_id,{direction:e.target.value as Calibration['direction']})}><option value="increasing">Counts increase</option><option value="decreasing">Counts decrease</option></select></label><label className="text-xs font-bold text-[#6b7f72]">Speed cap (%)<input className="field mt-1" type="number" min="1" max="100" value={c.speed} onChange={e=>change(c.servo_id,{speed:Number(e.target.value)})}/></label></div>
-    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I measured these positions and limits on this servo and checked that travel is safe.</label>
+    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-4 leading-5"><input type="checkbox" checked={c.jog_limits_verified||false} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,jog_limits_verified:e.target.checked}:x))} className="mt-1"/> I measured the minimum and maximum counts for a small direct test on this servo.</label>
+    <label className="flex items-start gap-2 text-xs text-[#63796a] mt-3 leading-5"><input type="checkbox" checked={c.verified} onChange={e=>setDraft(current=>current.map(x=>x.servo_id===c.servo_id?{...x,verified:e.target.checked}:x))} className="mt-1"/> I also measured open and closed positions and direction for saved gestures.</label>
     <button className="btn btn-primary mt-4 flex items-center gap-2" onClick={()=>save(c)}><Save size={15}/> Save calibration</button>
    </div>
   })}</div>
@@ -201,7 +203,7 @@ function Devices({status,hardware,scan,action,go}:{status:Status,hardware:Hardwa
  return <div className="space-y-5">
   <div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#839187] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div>
   <div className="card p-5 max-w-[1040px]">
-   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; safe travel limits still need measurement.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
+   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#839187] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; direct-test limits are recorded in Calibration.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
    {hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}
    {hardware?.port&&<p className="text-xs text-[#839187] mt-4">Controller: {hardware.port}</p>}
    <div className="grid md:grid-cols-2 gap-2 mt-4">{servoMounts.map(({id,location})=>{

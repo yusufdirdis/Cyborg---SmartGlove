@@ -53,15 +53,16 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
 - There are exactly six servos, with IDs 1–6: pinky, ring, middle, index, thumb flexion, thumb opposition. The glove builder supplied this physical mapping. Every pose must include all six as integer percentages from 0 to 100. JSON keys arrive as strings and Pydantic coerces them.
 - The first release used another ID order. `init_db()` remaps stored macro steps once using SQLite `user_version`; version 1 macro imports are remapped, while version 2 exports use the current ID order. Calibration records stay on their physical IDs.
 - A sequence has 1–30 steps, each lasting 100–10,000 ms. A `pose` macro has exactly one step.
-- Calibration counts run from 0 to 4095. The constraints are:
+- User-selected app calibration counts run from 0 to 4000. This cap is separate from each glove cord's measured safe travel. The constraints are:
   - min < max
   - open and closed both fall within [min, max]
   - |closed − open| ≥ 10
   - `direction` matches the sign of closed − open
+  - `jog_limits_verified` records direct-test bounds separately from full gesture `verified`; one does not imply the other.
   
   The seeded values are placeholders and are marked unverified.
 - Vision detections (`POST /api/vision/detection`) only record the event. They must **never** trigger motion, and a test enforces this.
-- The read-only serial status route and one-servo preview are authorized. The narrow physical jog remains locked by default while the attached tendons' safe range is unmeasured. Do not enable it merely to demo the UI. Any future full pose or sequence driver must use `ServoTransport` and `gated_counts()` before every physical step. See the README's "Safety boundary" and "Integration next steps".
+- The read-only serial status route and one-servo preview are authorized. The narrow physical jog remains locked by default even after user-reported direct-test limits are recorded; a fresh off-body setup and physical power-cut check are required for a one-use move. Do not enable it merely to demo the UI. Any future full pose or sequence driver must use `ServoTransport` and `gated_counts()` before every physical step. See the README's "Safety boundary" and "Integration next steps".
 
 ## Tests
 

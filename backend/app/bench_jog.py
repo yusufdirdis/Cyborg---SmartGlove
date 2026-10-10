@@ -24,6 +24,7 @@ JOG_COUNTS = 10
 SPEED_STEPS_PER_SECOND = 50
 ACCELERATION = 5
 POSITION_MARGIN = 100
+MAX_APP_COUNT = 4000  # Conservative app cap requested by the glove builder.
 MAX_TEMPERATURE_C = 50
 MIN_VOLTAGE_V = 6.0
 MAX_VOLTAGE_V = 12.6
@@ -76,14 +77,14 @@ def target_for(snapshot: Snapshot, delta: int) -> int:
         raise BenchJogError("Servo supply voltage is outside the conservative bench range; no movement sent.")
     if snapshot.temperature_c is None or snapshot.temperature_c >= MAX_TEMPERATURE_C:
         raise BenchJogError("Servo is too warm or temperature is unknown; no movement sent.")
-    if snapshot.position is None or not POSITION_MARGIN <= snapshot.position <= 4095 - POSITION_MARGIN:
+    if snapshot.position is None or not POSITION_MARGIN <= snapshot.position <= MAX_APP_COUNT - POSITION_MARGIN:
         raise BenchJogError("Servo position is missing or too close to the numeric range edge.")
     if snapshot.goal_position is None or abs(snapshot.goal_position - snapshot.position) > MAX_STORED_TARGET_ERROR:
         raise BenchJogError("Stored target is far from the present position. Do not enable torque in this state.")
     if snapshot.torque_enabled != 1:
         raise BenchJogError("Servo torque is not enabled; no movement sent.")
     target = snapshot.position + delta
-    if not POSITION_MARGIN <= target <= 4095 - POSITION_MARGIN:
+    if not POSITION_MARGIN <= target <= MAX_APP_COUNT - POSITION_MARGIN:
         raise BenchJogError("Proposed target is too close to the numeric range edge.")
     return target
 

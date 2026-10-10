@@ -10,7 +10,8 @@ from app.main import CalibrationInput, app
 
 def measured_calibration():
     return CalibrationInput(open_count=950, closed_count=1050, min_count=900,
-                            max_count=1100, direction="increasing", speed=20, verified=True)
+                            max_count=1100, direction="increasing", speed=20,
+                            verified=False, jog_limits_verified=True)
 
 
 class FakeDriver:
@@ -94,13 +95,24 @@ def test_one_use_confirmation_and_stale_calibration_block_writes(fake_controller
                             calibration=calibration, stopped=False)
 
 
-def test_unverified_or_placeholder_calibration_never_prepares_write(fake_controller, monkeypatch):
+def test_unverified_or_out_of_range_direct_limits_never_prepare_write(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
-    unverified = measured_calibration().model_copy(update={"verified": False})
+    unverified = measured_calibration().model_copy(update={"jog_limits_verified": False, "verified": True})
     assert control.prepare_jog(1, 10, unverified, False)["can_execute"] is False
     placeholder = CalibrationInput(open_count=2048, closed_count=2448, min_count=1800,
-                                   max_count=2600, direction="increasing", speed=30, verified=True)
+                                   max_count=2600, direction="increasing", speed=30,
+                                   verified=False, jog_limits_verified=True)
     assert control.prepare_jog(1, 10, placeholder, False)["can_execute"] is False
+    assert not any(call[0] == "move" for call in fake_controller)
+
+
+def test_measured_direct_limits_do_not_require_gesture_endpoints(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    direct_only = CalibrationInput(open_count=2048, closed_count=2448, min_count=0,
+                                   max_count=4000, direction="increasing", speed=30,
+                                   verified=False, jog_limits_verified=True)
+    preview = control.prepare_jog(1, 10, direct_only, False)
+    assert preview["can_execute"] is True and preview["target"] == 1010
     assert not any(call[0] == "move" for call in fake_controller)
 
 
