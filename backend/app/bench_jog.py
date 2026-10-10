@@ -64,9 +64,8 @@ def read_snapshot(driver: FeetechTuna, servo_id: int) -> Snapshot:
     return Snapshot(model, position, goal_position, None if voltage is None else voltage / 10, temperature, moving, mode, torque)
 
 
-def target_for(snapshot: Snapshot, delta: int) -> int:
-    if delta not in (-JOG_COUNTS, JOG_COUNTS):
-        raise BenchJogError(f"Only a single +{JOG_COUNTS} or -{JOG_COUNTS} count jog is allowed.")
+def validate_snapshot(snapshot: Snapshot, *, margin: int = POSITION_MARGIN) -> None:
+    """Read-only checks shared by small jogs and confirmed position moves."""
     if snapshot.model != MODEL_ST3215:
         raise BenchJogError(f"Unexpected servo model {snapshot.model}; expected {MODEL_ST3215}.")
     if snapshot.mode != 0:
@@ -77,12 +76,18 @@ def target_for(snapshot: Snapshot, delta: int) -> int:
         raise BenchJogError("Servo supply voltage is outside the conservative bench range; no movement sent.")
     if snapshot.temperature_c is None or snapshot.temperature_c >= MAX_TEMPERATURE_C:
         raise BenchJogError("Servo is too warm or temperature is unknown; no movement sent.")
-    if snapshot.position is None or not POSITION_MARGIN <= snapshot.position <= MAX_APP_COUNT - POSITION_MARGIN:
+    if snapshot.position is None or not margin <= snapshot.position <= MAX_APP_COUNT - margin:
         raise BenchJogError("Servo position is missing or too close to the numeric range edge.")
     if snapshot.goal_position is None or abs(snapshot.goal_position - snapshot.position) > MAX_STORED_TARGET_ERROR:
         raise BenchJogError("Stored target is far from the present position. Do not enable torque in this state.")
     if snapshot.torque_enabled != 1:
         raise BenchJogError("Servo torque is not enabled; no movement sent.")
+
+
+def target_for(snapshot: Snapshot, delta: int) -> int:
+    if delta not in (-JOG_COUNTS, JOG_COUNTS):
+        raise BenchJogError(f"Only a single +{JOG_COUNTS} or -{JOG_COUNTS} count jog is allowed.")
+    validate_snapshot(snapshot)
     target = snapshot.position + delta
     if not POSITION_MARGIN <= target <= MAX_APP_COUNT - POSITION_MARGIN:
         raise BenchJogError("Proposed target is too close to the numeric range edge.")

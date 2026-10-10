@@ -58,3 +58,19 @@ def gated_jog_count(start: int, target: int, calibration: CalibrationInput,
     if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):
         raise PermissionError("Current position or target is outside measured limits")
     return target
+
+
+def gated_target_count(start: int, target: int, calibration: CalibrationInput,
+                       approval: ActuationApproval, stopped: bool) -> int:
+    """Gate a deliberate single-servo position command against measured limits."""
+    if stopped:
+        raise PermissionError("Software stop is latched")
+    if not approval.approved or not approval.physical_estop_tested_this_session:
+        raise PermissionError("Fresh confirmation and a tested physical power cutoff are required")
+    if not calibration.jog_limits_verified:
+        raise PermissionError("Direct-test limits are not verified")
+    if target == start:
+        raise PermissionError("Servo is already at that count")
+    if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):
+        raise PermissionError("Current position or target is outside measured limits")
+    return target

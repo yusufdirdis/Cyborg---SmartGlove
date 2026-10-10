@@ -1,7 +1,7 @@
 """Read-only status from the supplied Feetech/ST3215 control library.
 
-This module never enables torque or sends target positions. Simulation remains
-the only movement path in the API.
+This module never enables torque or sends target positions. Confirmed manual
+position commands use a separate hardware control module.
 """
 
 from __future__ import annotations

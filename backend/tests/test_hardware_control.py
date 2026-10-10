@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import hardware_control as control
-from app.hardware_boundary import ActuationApproval, gated_jog_count
+from app.hardware_boundary import ActuationApproval, gated_jog_count, gated_target_count
 from app.main import CalibrationInput, app
 
 
@@ -156,3 +156,74 @@ def test_api_rejects_nonlocal_hardware_request(monkeypatch):
         stop = client.post("/api/control/stop", headers={"Origin": "https://other.example"})
     assert result.status_code == 403
     assert stop.status_code == 403
+
+
+def test_position_preview_is_read_only_and_respects_write_lock(fake_controller, monkeypatch):
+    monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    calibration = CalibrationInput(open_count=2048, closed_count=2448, min_count=0,
+                                   max_count=4000, direction="increasing", speed=30,
+                                   verified=False, jog_limits_verified=True)
+    preview = control.prepare_position(1, 3500, 250, calibration, False)
+    assert preview["start"] == 1000 and preview["target"] == 3500
+    assert preview["can_execute"] is False and "token" not in preview
+    assert not any(call[0] in ("move", "write") for call in fake_controller)
+
+
+def test_position_command_is_single_use_and_speed_is_passed_to_driver(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibration = CalibrationInput(open_count=2048, closed_count=2448, min_count=0,
+                                   max_count=4000, direction="increasing", speed=30,
+                                   verified=False, jog_limits_verified=True)
+    preview = control.prepare_position(1, 3500, 400, calibration, False)
+    assert preview["can_execute"] is True
+    assert not any(call[0] == "move" for call in fake_controller)
+    with pytest.raises(control.HardwareControlError, match="power cutoff"):
+        control.execute_position(preview["token"], preview["phrase"], off_body=True,
+                                 power_cut_tested=False, cord_path_clear=True,
+                                 calibration=calibration, stopped=False)
+    assert not any(call[0] == "move" for call in fake_controller)
+    preview = control.prepare_position(1, 3500, 400, calibration, False)
+    result = control.execute_position(preview["token"], preview["phrase"], off_body=True,
+                                      power_cut_tested=True, cord_path_clear=True,
+                                      calibration=calibration, stopped=False)
+    assert result["accepted"] is True
+    assert [call for call in fake_controller if call[0] == "move"] == [("move", 1, 3500, 400, 5)]
+    with pytest.raises(control.HardwareControlError, match="expired"):
+        control.execute_position(preview["token"], preview["phrase"], off_body=True,
+                                 power_cut_tested=True, cord_path_clear=True,
+                                 calibration=calibration, stopped=False)
+
+
+def test_position_move_rechecks_calibration_stop_and_target(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    calibration = measured_calibration()
+    assert control.prepare_position(1, 1200, 250, calibration, False)["can_execute"] is False
+    preview = control.prepare_position(1, 1050, 250, calibration, False)
+    changed = calibration.model_copy(update={"max_count": 1200})
+    with pytest.raises(control.HardwareControlError, match="Calibration changed"):
+        control.execute_position(preview["token"], preview["phrase"], off_body=True,
+                                 power_cut_tested=True, cord_path_clear=True,
+                                 calibration=changed, stopped=False)
+    preview = control.prepare_position(1, 1050, 250, calibration, False)
+    with pytest.raises(control.HardwareControlError, match="stop was pressed"):
+        control.execute_position(preview["token"], preview["phrase"], off_body=True,
+                                 power_cut_tested=True, cord_path_clear=True,
+                                 calibration=calibration, stopped=False, is_stopped=lambda: True)
+    assert not any(call[0] == "move" for call in fake_controller)
+    with pytest.raises(control.HardwareControlError, match="speed"):
+        control.prepare_position(1, 1050, 501, calibration, False)
+    approval = ActuationApproval(True, True)
+    assert gated_target_count(1000, 1050, calibration, approval, False) == 1050
+    with pytest.raises(PermissionError):
+        gated_target_count(1000, 1200, calibration, approval, False)
+
+
+def test_position_route_rejects_nonlocal_and_invalid_speed(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    with TestClient(app) as client:
+        foreign = client.post("/api/hardware/position/preview", json={"servo_id": 1, "target": 3500, "speed": 250},
+                              headers={"Origin": "https://other.example"})
+        invalid = client.post("/api/hardware/position/preview", json={"servo_id": 1, "target": 3500, "speed": 900})
+    assert foreign.status_code == 403
+    assert invalid.status_code == 422
+    assert not any(call[0] == "move" for call in fake_controller)

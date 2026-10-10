@@ -244,6 +244,12 @@ class JogConfirmInput(BaseModel):
     cord_path_clear: bool
 
 
+class PositionPreviewInput(BaseModel):
+    servo_id: int = Field(ge=1, le=6)
+    target: int = Field(ge=0, le=MAX_SERVO_COUNT)
+    speed: int = Field(ge=50, le=500)
+
+
 def _local_hardware_request(request: Request) -> None:
     client_host = request.client.host if request.client else ""
     origin = request.headers.get("origin")
@@ -255,9 +261,11 @@ def _local_hardware_request(request: Request) -> None:
 
 @app.get("/api/hardware/control")
 def hardware_control_status():
-    from .hardware_control import writes_enabled
+    from .hardware_control import POSITION_SPEED_DEFAULT, POSITION_SPEED_MAX, POSITION_SPEED_MIN, writes_enabled
 
-    return {"writes_enabled": writes_enabled(), "step_counts": 10}
+    return {"writes_enabled": writes_enabled(), "step_counts": 10,
+            "position_speed_min": POSITION_SPEED_MIN, "position_speed_max": POSITION_SPEED_MAX,
+            "position_speed_default": POSITION_SPEED_DEFAULT}
 
 
 @app.post("/api/hardware/jog/preview")
@@ -300,6 +308,46 @@ def execute_hardware_jog(payload: JogConfirmInput, request: Request):
                            cord_path_clear=payload.cord_path_clear,
                            calibration=calibration, stopped=sim.stopped,
                            is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/position/preview")
+def preview_hardware_position(payload: PositionPreviewInput, request: Request):
+    from .hardware_control import HardwareControlError, prepare_position
+
+    _local_hardware_request(request)
+    with db() as conn:
+        row = conn.execute("SELECT data FROM calibration WHERE servo_id=?", (payload.servo_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Servo calibration not found")
+    calibration = CalibrationInput.model_validate_json(row["data"])
+    try:
+        return prepare_position(payload.servo_id, payload.target, payload.speed, calibration, sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/position/execute")
+def execute_hardware_position(payload: JogConfirmInput, request: Request):
+    from .hardware_control import HardwareControlError, execute_position, pending_position_servo_id
+
+    _local_hardware_request(request)
+    servo_id = pending_position_servo_id(payload.token)
+    if servo_id is None:
+        raise HTTPException(409, "Move preview expired. Check the move again.")
+    with db() as conn:
+        row = conn.execute("SELECT data FROM calibration WHERE servo_id=?", (servo_id,)).fetchone()
+    if row is None:
+        raise HTTPException(409, "Servo calibration is unavailable.")
+    calibration = CalibrationInput.model_validate_json(row["data"])
+    try:
+        return execute_position(payload.token, payload.phrase,
+                                off_body=payload.off_body,
+                                power_cut_tested=payload.power_cut_tested,
+                                cord_path_clear=payload.cord_path_clear,
+                                calibration=calibration, stopped=sim.stopped,
+                                is_stopped=lambda: sim.stopped)
     except HardwareControlError as exc:
         raise HTTPException(409, str(exc)) from exc
 
