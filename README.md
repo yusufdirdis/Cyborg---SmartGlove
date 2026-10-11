@@ -43,7 +43,7 @@ Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>.
 
 ## Local YOLO and gesture development
 
-This branch adds a separate backend vision lab without changing the team's React frontend. From the existing backend environment, open <http://127.0.0.1:8000/vision/ui> to test the ESP32-S3 `/stream` camera, webcam fallback, static images, COCO object detection, 21 hand landmarks, gesture estimates, and normalized six-channel imitation. The pretrained YOLO11 nano checkpoint and MediaPipe hand task model load on demand and run locally. The first load downloads their model files. Camera URL and model paths can be configured with the `HANDOFF_*` environment variables described in [`backend/app/vision/README.md`](backend/app/vision/README.md).
+The React dashboard's **AI Vision** page connects to the local vision service. Choose an ESP32-S3 stream or webcam, then switch between the raw **Default view** and annotated **Object detection view** while inference continues in the backend. The page shows detections, 21 hand landmarks, gesture estimates, and normalized six-channel imitation. The standalone <http://127.0.0.1:8000/vision/ui> remains available for development and static-image checks. The pretrained YOLO11 nano checkpoint and MediaPipe hand task model load on demand and run locally; the first load downloads their model files. Camera URL and model paths can be configured with the `HANDOFF_*` environment variables described in [`backend/app/vision/README.md`](backend/app/vision/README.md).
 
 Vision APIs are documented in [`backend/app/vision/README.md`](backend/app/vision/README.md). Imitation values are simulation-only normalized estimates and have no connection to physical servo command routes.
 
