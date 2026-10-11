@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import assistant
+from .vision.api import router as vision_router
 
 
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
@@ -246,10 +247,12 @@ async def poll_physical_positions():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     from .live_positions import enabled as live_positions_enabled
+    from .vision.service import vision_service
 
     init_db()
     poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
     yield
+    vision_service.stop()
     if poller:
         poller.cancel()
     if sim.task and not sim.task.done():
@@ -258,6 +261,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="handoff", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(vision_router)
 
 
 @app.get("/api/status")

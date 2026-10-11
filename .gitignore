@@ -11,6 +11,12 @@ backend/tests/test.sqlite3
 frontend/*.tsbuildinfo
 .DS_Store
 backend/.env
+backend/models/*.pt
+backend/models/*.task
+backend/models/*.download
+backend/*.pt
+backend/*.task
+backend/datasets/
 
 # Local Claude Code skills
 .claude/skills/

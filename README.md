@@ -41,6 +41,12 @@ npm run dev -- --port 5173
 
 Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>. The Vite server proxies `/api` and `/ws` to the local API. Keep both terminals running.
 
+## Local YOLO and gesture development
+
+This branch adds a separate backend vision lab without changing the team's React frontend. From the existing backend environment, open <http://127.0.0.1:8000/vision/ui> to test the ESP32-S3 `/stream` camera, webcam fallback, static images, COCO object detection, 21 hand landmarks, gesture estimates, and normalized six-channel imitation. The pretrained YOLO11 nano checkpoint and MediaPipe hand task model load on demand and run locally. The first load downloads their model files. Camera URL and model paths can be configured with the `HANDOFF_*` environment variables described in [`backend/app/vision/README.md`](backend/app/vision/README.md).
+
+Vision APIs are documented in [`backend/app/vision/README.md`](backend/app/vision/README.md). Imitation values are simulation-only normalized estimates and have no connection to physical servo command routes.
+
 
 On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 3 JSON file with raw 0–4000 counts; older version 1 and 2 exports are converted when imported. Existing saved percentages are migrated to counts once. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
 
