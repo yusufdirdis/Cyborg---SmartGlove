@@ -297,9 +297,14 @@ async def lifespan(_app: FastAPI):
     from .live_positions import enabled as live_positions_enabled
     from .vision.service import vision_service
 
+    from . import lcd_bridge
+
     init_db()
     poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
+    lcd = asyncio.create_task(lcd_bridge.run(lambda: sim.stopped)) if lcd_bridge.enabled() else None
     yield
+    if lcd:
+        lcd.cancel()
     vision_service.stop()
     if poller:
         poller.cancel()
@@ -426,10 +431,12 @@ def servos():
 def hardware_status():
     if cloud_mode():
         return {"connected": False, "port": None, "servos": [], "error": "Hardware is only available on the local API.", "checked_at": time.time()}
+    from . import lcd_bridge
     from .servo_status import scan_servos
 
     global _device_session
     result = scan_servos()
+    lcd_bridge.record_reading(result)
     if result.get("connected") and _device_session is None:
         _device_session = str(_uuid4())
         record("device_sessions", id=_device_session, port=result.get("port"), api_pid=os.getpid(), readings=result)
@@ -607,8 +614,17 @@ def move_hardware_live(payload: LiveMoveInput, request: Request):
 def enable_hardware_torque(payload: TorqueEnableInput, request: Request):
     from .hardware_control import HardwareControlError, enable_torque
 
+    from . import lcd_bridge
+
     _local_hardware_request(request)
-    return record_move("torque_enable", payload.servo_ids, payload.model_dump(), lambda: enable_torque(payload.servo_ids, sim.stopped))
+    lcd_bridge.torque_started()
+    try:
+        result = record_move("torque_enable", payload.servo_ids, payload.model_dump(), lambda: enable_torque(payload.servo_ids, sim.stopped))
+    except Exception as exc:
+        lcd_bridge.torque_finished(str(exc.detail if isinstance(exc, HTTPException) else exc))
+        raise
+    lcd_bridge.torque_finished()
+    return result
 
 
 @app.get("/api/macros")

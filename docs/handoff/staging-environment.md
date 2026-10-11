@@ -8,7 +8,8 @@
 - **Database:** staging uses the **same Supabase data as production** (schema `handoff`, the default), on the owner's decision. Macros, calibration and logs are shared, so a macro created or deleted on staging also appears on the live site. Log rows from staging are tagged `instance = staging`.
 - **Same database URL:** staging uses the same `SUPABASE_DB_URL` as production. Copy it from production's Railway variables, never print it, and **don't set `HANDOFF_DB_SCHEMA`**.
 - **Database change already applied:** macros now have a `source` column ("From you" / "From the assistant"). The owner added it to Supabase, and the currently deployed production code ignores it safely. The first staging start labels the five built-in samples and AI-saved macros "From the assistant", once (data version 3). That label is shared with production, as intended.
-- **Code:** `feat/onlineHardware` on GitHub. Tests: `cd backend && python -m pytest -q` gives 179 passed, 2 skipped. `cd frontend && npm run build` passes.
+- **Code:** `feat/onlineHardware` on GitHub. Tests: `cd backend && python -m pytest -q` gives 185 passed, 2 skipped. `cd frontend && npm run build` passes.
+- **LCD display (from `main`):** `backend/app/lcd_bridge.py` is a local, display-only feed for the ESP LCD. It runs only when `HANDOFF_LCD_PORT` is set. Never set that variable on Railway (staging or production).
 - **What the redesign changes on the online site:**
   - Glove controls show "local only" cards **until the laptop bridge is online and armed**. That covers Manual Control, Settings › Devices, the Overview's physical mode and "Test on glove". The sidebar then says "Real glove armed via the bridge" instead of "Simulation only on this site".
   - AI Vision always stays local-only.

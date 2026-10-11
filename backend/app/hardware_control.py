@@ -169,6 +169,7 @@ LIVE_MOVE_INITIAL_WAIT_SECONDS = 1.0
 LIVE_MOVE_POLL_SECONDS = 0.1
 LIVE_MOVE_TIMEOUT_SECONDS = 30.0
 MACRO_PREVIEW_SECONDS = 120
+POSITION_READ_TOLERANCE = 50
 
 
 def writes_enabled() -> bool:
@@ -651,8 +652,11 @@ def _validate_live_snapshot(snapshot, servo_id: int) -> None:
         raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
     if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
         raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
-    if snapshot.position is None or not 0 <= snapshot.position <= 4000:
-        raise HardwareControlError(f"Servo {servo_id} position is unavailable or outside 0–4000 counts.")
+    if snapshot.position is None:
+        raise HardwareControlError(f"Servo {servo_id} position could not be read. Check its cable.")
+    # A servo resting at 0 can read -1/-2 (sign bit); targets themselves stay within 0–4000.
+    if not -POSITION_READ_TOLERANCE <= snapshot.position <= 4000 + POSITION_READ_TOLERANCE:
+        raise HardwareControlError(f"Servo {servo_id} reads {snapshot.position} counts, outside 0–4000.")
 
 
 def enable_torque(servo_ids: list[int], stopped: bool) -> dict:

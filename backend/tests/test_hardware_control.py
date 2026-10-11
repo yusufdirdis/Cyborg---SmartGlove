@@ -459,3 +459,17 @@ def test_torque_enable_api_is_local_and_explicit(fake_controller, monkeypatch):
         foreign = client.post("/api/hardware/torque/enable", json={"servo_ids": [4]},
                               headers={"Origin": "https://other.example"})
         assert foreign.status_code == 403
+
+
+def test_live_health_check_tolerates_servo_resting_just_past_zero():
+    from app.bench_jog import Snapshot
+
+    def snap(position):
+        return Snapshot(777, position, 0, 12.4, 38, 0, 0, 1)
+
+    control._validate_live_snapshot(snap(-2), 2)
+    control._validate_live_snapshot(snap(4003), 2)
+    with pytest.raises(control.HardwareControlError, match="reads -200 counts"):
+        control._validate_live_snapshot(snap(-200), 2)
+    with pytest.raises(control.HardwareControlError, match="could not be read"):
+        control._validate_live_snapshot(snap(None), 2)
