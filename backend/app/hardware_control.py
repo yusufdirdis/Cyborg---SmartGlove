@@ -149,7 +149,6 @@ class PendingMacro:
     macro_fingerprint: str
     steps: tuple[tuple[tuple[int, int, int], ...], ...]  # id, raw count, speed
     starts: tuple[tuple[int, int], ...]
-    phrase: str
     expires_at: float
 
 
@@ -169,6 +168,7 @@ LIVE_POSITION_TOLERANCE = 5
 LIVE_MOVE_INITIAL_WAIT_SECONDS = 1.0
 LIVE_MOVE_POLL_SECONDS = 0.1
 LIVE_MOVE_TIMEOUT_SECONDS = 30.0
+MACRO_PREVIEW_SECONDS = 120
 
 
 def writes_enabled() -> bool:
@@ -232,19 +232,19 @@ def prepare_macro(name: str, macro_fingerprint: str, steps: list[dict], stopped:
         return {"can_execute": False, "steps": preview_steps, "blocked_reason": " ".join(dict.fromkeys(blocked))}
 
     starts = tuple((sid, snapshots[sid].position) for sid in range(1, 7))
-    phrase = f"RUN MACRO {name} ON GLOVE"
-    pending = PendingMacro(str(uuid4()), macro_fingerprint, tuple(command_steps), starts, phrase,
-                           time.monotonic() + 30)
+    pending = PendingMacro(str(uuid4()), macro_fingerprint, tuple(command_steps), starts,
+                           time.monotonic() + MACRO_PREVIEW_SECONDS)
     with _macro_pending_lock:
         _macro_pending = pending
     return {"can_execute": True, "steps": preview_steps, "token": pending.token,
-            "phrase": phrase, "expires_in_seconds": 30,
+            "expires_in_seconds": MACRO_PREVIEW_SECONDS,
             "message": "Each step sends all six raw targets together at the Manual Control default speed. Step duration is simulation timing only."}
 
 
-def execute_macro(token: str, phrase: str, macro_fingerprint: str, *, off_body: bool,
-                  power_cut_tested: bool, cord_path_clear: bool,
-                  stopped: bool, is_stopped: Callable[[], bool] | None = None) -> dict:
+def execute_macro(token: str, macro_fingerprint: str, *, stopped: bool,
+                  is_stopped: Callable[[], bool] | None = None) -> dict:
+    """Run a previewed macro immediately. The user's Test on glove click is the instruction;
+    health, write-mode, stop and changed-macro checks still apply."""
     global _macro_pending
     with _macro_pending_lock:
         pending = _macro_pending
@@ -253,10 +253,6 @@ def execute_macro(token: str, phrase: str, macro_fingerprint: str, *, off_body: 
         raise HardwareControlError("Macro preview expired. Review the hardware move again.")
     if not writes_enabled() or stopped:
         raise HardwareControlError("Physical movement is disabled or software stop is latched.")
-    if not (off_body and power_cut_tested and cord_path_clear):
-        raise HardwareControlError("Confirm the glove is off-body, the power cutoff was tested, and the cord path is clear.")
-    if phrase.strip() != pending.phrase:
-        raise HardwareControlError("Confirmation text did not match. No command was sent.")
     if macro_fingerprint != pending.macro_fingerprint:
         raise HardwareControlError("Macro changed after preview. Review it again.")
     if is_stopped and is_stopped():
@@ -296,6 +292,15 @@ def execute_macro(token: str, phrase: str, macro_fingerprint: str, *, off_body: 
         raise HardwareControlError(str(exc)) from exc
     return {"accepted": True, "steps_completed": completed,
             "message": "Macro completed on the glove."}
+
+
+def run_macro(name: str, macro_fingerprint: str, steps: list[dict], *, stopped: bool,
+              is_stopped: Callable[[], bool] | None = None) -> dict:
+    """Test on glove: one click sends the macro. Servo health, write mode and Stop still apply."""
+    preview = prepare_macro(name, macro_fingerprint, steps, stopped)
+    if not preview["can_execute"]:
+        raise HardwareControlError(f"{preview['blocked_reason']} No motor command was sent.")
+    return execute_macro(preview["token"], macro_fingerprint, stopped=stopped, is_stopped=is_stopped)
 
 
 def pending_servo_id(token: str) -> int | None:
