@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +38,17 @@ Upgrades = list[tuple[int, Callable[[dict], dict]]]
 
 def upgrade_steps(steps: list[dict], transform: Callable[[dict], dict]) -> list[dict]:
     return [{**step, "positions": {str(k): v for k, v in transform(step["positions"]).items()}} for step in steps]
+
+
+SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
+
+
+def db_schema() -> str:
+    """Postgres schema for this API: `handoff` (live site) or e.g. `handoff_staging` for a test environment."""
+    name = os.environ.get("HANDOFF_DB_SCHEMA", "handoff").strip() or "handoff"
+    if not SCHEMA_NAME.match(name) or name in ("public", "auth", "storage", "extensions"):
+        raise ValueError(f"HANDOFF_DB_SCHEMA must be a lowercase identifier like handoff_staging, not {name!r}.")
+    return name
 
 
 class StoreUnavailable(Exception):
@@ -177,12 +189,18 @@ class PostgresStore:
     """The `handoff` schema in the shared Resume Fit Supabase project, through the session pooler."""
     kind = "postgres"
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, schema: str | None = None):
         from psycopg_pool import ConnectionPool
+
+        self.schema = schema or db_schema()
 
         self.pool = ConnectionPool(url, min_size=0, max_size=5, timeout=8, open=False,
                                    kwargs={"autocommit": True, "connect_timeout": 8})
         self.logs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="handoff-log")  # logs never delay a response
+
+    def _sql(self, sql: str) -> str:
+        """Queries are written against `handoff.`; point them at this API's schema (validated identifier)."""
+        return re.sub(r"(?<![\w.])handoff\.", f"{self.schema}.", sql)
 
     def _run(self, sql: str, params: tuple | list = (), fetch: str | None = None):
         import psycopg
@@ -191,7 +209,7 @@ class PostgresStore:
 
         try:
             with self.pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql, params)
+                cur.execute(self._sql(sql), params)
                 if fetch == "one":
                     return cur.fetchone()
                 if fetch == "all":
@@ -208,20 +226,21 @@ class PostgresStore:
         self.pool.open(wait=False)
         # The schema comes from backend/supabase/handoff_schema.sql, applied once by an admin.
         if self._run("select to_regclass('handoff.meta') as t", fetch="one")["t"] is None:
-            raise StoreUnavailable("The handoff schema is missing or outdated. Apply backend/supabase/handoff_schema.sql first.")
+            raise StoreUnavailable(f"The {self.schema} schema is missing or outdated. Apply backend/supabase/handoff_schema.sql "
+                                   f"(python -m app.schema_sql --schema {self.schema}) first.")
         try:
             # One transaction with the version row locked, so the local and Railway APIs never upgrade twice.
             with self.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
-                cur.execute("select value from handoff.meta where key = 'data_version' for update")
+                cur.execute(self._sql("select value from handoff.meta where key = 'data_version' for update"))
                 version = int(cur.fetchone()[0])
                 for target, transform in upgrades:
                     if version >= target:
                         continue
-                    cur.execute("select id, steps from handoff.macros")
+                    cur.execute(self._sql("select id, steps from handoff.macros"))
                     for macro_id, steps in cur.fetchall():
-                        cur.execute("update handoff.macros set steps = %s where id = %s", (Jsonb(upgrade_steps(steps, transform)), macro_id))
+                        cur.execute(self._sql("update handoff.macros set steps = %s where id = %s"), (Jsonb(upgrade_steps(steps, transform)), macro_id))
                     version = target
-                cur.execute("update handoff.meta set value = %s where key = 'data_version'", (str(version),))
+                cur.execute(self._sql("update handoff.meta set value = %s where key = 'data_version'"), (str(version),))
         except (psycopg.OperationalError, PoolTimeout) as exc:
             raise StoreUnavailable("Database unavailable. Check SUPABASE_DB_URL and that the Supabase project is not paused.") from exc
 

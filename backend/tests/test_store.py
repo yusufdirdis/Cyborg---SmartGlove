@@ -124,3 +124,29 @@ def test_postgres_store_round_trip():
         assert pg.delete_macro(saved["id"]) and pg.get_macro(saved["id"]) is None
     finally:
         pg.pool.close()
+
+
+def test_db_schema_is_configurable_and_validated(monkeypatch):
+    from app.store import db_schema
+
+    monkeypatch.delenv("HANDOFF_DB_SCHEMA", raising=False)
+    assert db_schema() == "handoff"
+    monkeypatch.setenv("HANDOFF_DB_SCHEMA", "handoff_staging")
+    assert db_schema() == "handoff_staging"
+    for bad in ("public", "auth", "Handoff", "handoff;drop", "a" * 50, "handoff.x"):
+        monkeypatch.setenv("HANDOFF_DB_SCHEMA", bad)
+        with pytest.raises(ValueError):
+            db_schema()
+
+
+def test_postgres_queries_and_schema_sql_follow_the_configured_schema():
+    from app.schema_sql import render
+
+    pg = PostgresStore("postgresql://u:p@127.0.0.1:1/postgres", schema="handoff_staging")
+    assert pg._sql("select * from handoff.macros join handoff.meta on true") == "select * from handoff_staging.macros join handoff_staging.meta on true"
+    assert pg._sql("grant usage to handoff_app") == "grant usage to handoff_app"
+    sql = render("handoff_staging")
+    assert "handoff." not in sql and "create schema if not exists handoff_staging;" in sql
+    assert "schemaname = 'handoff_staging'" in sql and "to handoff_app" in sql
+    with pytest.raises(ValueError):
+        render("public")

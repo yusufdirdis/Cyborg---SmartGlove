@@ -36,6 +36,7 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
   - Persistence goes through `backend/app/store.py`: `SQLiteStore` by default, or `PostgresStore` when `SUPABASE_DB_URL` is set. The Postgres store uses the `handoff` schema in the shared Resume Fit Supabase project (`backend/supabase/handoff_schema.sql`, applied by hand, never `supabase db push`) and connects as `handoff_app`.
   - There is no silent fallback: a DB outage raises `StoreUnavailable`, which returns 503. Stop and reset never depend on the store.
   - Macro and calibration `PUT` take an optional `revision`; a mismatch returns 409.
+  - `HANDOFF_DB_SCHEMA` picks the Postgres schema (`handoff` for the live site, `handoff_staging` for testing). `PostgresStore._sql()` rewrites `handoff.` in its queries, and `python -m app.schema_sql --schema <name>` renders the schema SQL for a new one.
   - Audit logs (`record()`, `record_move()`, `record_proposal()` in `main.py`) are best-effort, written after the action, and never read back to drive motion.
   - `tests/test_store.py` covers these rules. Its real-Postgres test runs only with `HANDOFF_TEST_PG_URL`.
   - Macros store `steps` as a JSON text column. Calibration stores each servo's `CalibrationInput` as a JSON blob.

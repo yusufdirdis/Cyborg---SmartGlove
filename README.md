@@ -60,6 +60,8 @@ Macros, calibration and audit logs can live in Supabase instead of SQLite. They 
 
 The audit logs record device sessions, E-stop confirmations, physical moves, AI proposals and vision detections. They are written after each action, never trigger motion, and a logging failure never blocks a response.
 
+A test environment can use its own schema in the same project: run `python -m app.schema_sql --schema handoff_staging`, apply the output once, and set `HANDOFF_DB_SCHEMA=handoff_staging`. The live site's `handoff` data stays untouched.
+
 With `SUPABASE_DB_URL` set there is no SQLite fallback. If the database is unreachable or the project is paused, macro and calibration routes return 503, while Stop and Reset still work. Remove the variable to go back to SQLite.
 
 ## Try the first milestone
