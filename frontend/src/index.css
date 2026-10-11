@@ -28,6 +28,14 @@
 .macro-actions .macro-test:hover{background:#2d684b}
 .macro-actions .macro-play{padding:0 13px 0 10px}
 .macro-actions .macro-delete:hover,.macro-actions .macro-delete:focus-visible{background:#fff7f4;border-color:#e2b6a9;color:#a74731}
+.macro-actions .macro-edit,.macro-actions .macro-delete{gap:0;padding:0;transition:gap .2s ease-out,padding .2s ease-out,background-color .15s,color .15s,border-color .15s}
+.macro-actions .btn-label{display:inline-block;max-width:0;opacity:0;overflow:hidden;transition:max-width .2s ease-out,opacity .15s}
+.macro-actions .macro-edit:hover,.macro-actions .macro-edit:focus-visible,.macro-actions .macro-delete:hover,.macro-actions .macro-delete:focus-visible{gap:6px;padding:0 12px}
+.macro-actions button:hover .btn-label,.macro-actions button:focus-visible .btn-label{max-width:80px;opacity:1}
+@media (hover:none){.macro-actions .macro-edit,.macro-actions .macro-delete{gap:6px;padding:0 12px}.macro-actions .btn-label{max-width:80px;opacity:1}}
+/* Phone rows have no room for four labelled buttons: Edit and Delete stay icon circles there (aria-labels still name them). */
+@media (hover:none){@container (max-width:520px){.macro-actions .macro-edit,.macro-actions .macro-delete{gap:0;padding:0}.macro-actions .btn-label{max-width:0;opacity:0}}}
+@media (prefers-reduced-motion:reduce){.btn-expand,.btn-expand .btn-label,.macro-actions .macro-edit,.macro-actions .macro-delete,.macro-actions .btn-label{transition:none}}
 @container (max-width:520px){.macro-row{grid-template-columns:24px minmax(0,1fr)}.macro-actions{grid-column:1/-1;flex-direction:row}.macro-actions .macro-edit{margin-left:auto}.macro-actions button{height:40px;min-width:40px;border-radius:20px}}
 .hand-diagram{background:radial-gradient(ellipse at 48% 42%,#ffffff 0%,#f7faf7 62%,#eff4ef 100%)}
 .hand-diagram svg{overflow:visible}
