@@ -190,3 +190,30 @@
 .gesture-meta{display:flex!important;align-items:center;gap:6px;min-width:0}
 .gesture-meta>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* — handoff UI/UX redesign: AI Vision restyle — */
+.vision-settings-grid{grid-template-columns:240px minmax(0,1fr);align-items:end}
+.vision-settings-row{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px 16px;align-items:end;margin-top:14px}
+.vision-field{color:#4f6658;font-size:12px}
+.vision-checks{display:flex;flex-wrap:wrap;gap:8px}
+.vision-check{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;border:1px solid #e1e7e0;border-radius:20px;background:#fff;color:#3d4a41;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.vision-field>span.vision-confidence-label{display:flex;justify-content:space-between;justify-self:stretch;margin:0;color:inherit}
+.vision-confidence-label b{color:#18201d;font-variant-numeric:tabular-nums}
+.vision-actions{border-top:1px solid #f0f2ef;padding-top:14px}
+.vision-component-status{display:flex;gap:6px;margin-left:auto}
+.vision-chip{display:inline-flex;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;background:#edf0ed;color:#5f6f65;text-transform:capitalize}
+.vision-chip.ok{background:#e3f7e8;color:#247658}
+.vision-runtime-error{display:flex;gap:8px;align-items:flex-start}
+.vision-runtime-error svg{flex:none;margin-top:1px}
+.vision-view-switch{padding:3px}
+.vision-view-switch button{font-size:11px;padding:0 13px;height:32px;color:#5f6d64}
+.vision-view-switch button.selected{color:#18201d;box-shadow:inset 0 0 0 1px #e1e7e0}
+.vision-stats small{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#63796a}
+.vision-stats b{font-size:13px;font-variant-numeric:tabular-nums}
+.vision-detection small{color:#63796a;font-family:Menlo,Consolas,monospace}
+.vision-value span{color:#4f6658}
+.vision-value>i em{background:#75ab75}
+.vision-servo-grid .vision-value>i em{background:#d9876d}
+.vision-results.stale>.card{opacity:.6}
+.spin{animation:nav-spin 1.6s linear infinite}
+@media(max-width:760px){.vision-settings-grid,.vision-settings-row{grid-template-columns:1fr}}
+
