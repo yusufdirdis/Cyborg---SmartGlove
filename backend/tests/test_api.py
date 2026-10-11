@@ -56,7 +56,47 @@ def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeyp
     with main_module.db() as conn:
         stored = json.loads(conn.execute("SELECT steps FROM macros WHERE id='old'").fetchone()[0])
         assert stored[0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+def test_macro_source_defaults_to_you_and_survives_edits():
+    with TestClient(app) as client:
+        payload = {"name": "Origin check", "description": "", "kind": "pose", "steps": [{"positions": pose(100), "duration_ms": 300}]}
+        created = client.post("/api/macros", json=payload).json()
+        assert created["source"] == "you"
+        assistant = client.post("/api/macros", json={**payload, "name": "Origin check AI", "source": "assistant"}).json()
+        assert assistant["source"] == "assistant"
+        edited = client.put(f"/api/macros/{assistant['id']}", json={**payload, "name": "Origin check AI edited"}).json()
+        assert edited["source"] == "assistant"
+        assert client.post("/api/macros", json={**payload, "source": "robot"}).status_code == 422
+        for macro_id in (created["id"], assistant["id"]):
+            client.delete(f"/api/macros/{macro_id}")
+
+
+def test_seeded_samples_are_from_the_assistant(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "seeded.sqlite3")
+    main_module.init_db()
+    with main_module.db() as conn:
+        rows = conn.execute("SELECT name, source FROM macros").fetchall()
+    assert len(rows) == 5 and {row["source"] for row in rows} == {"assistant"}
+
+
+def test_existing_database_gains_source_column(tmp_path, monkeypatch):
+    path = tmp_path / "v2.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
+        step = json.dumps([{"positions": pose(0), "duration_ms": 700}])
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("a", "Open hand", "All fingers relaxed", "pose", step, 1.0, 1.0))
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("b", "Wave", "Saved from AI assistant", "pose", step, 1.0, 1.0))
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("c", "Mine", "", "pose", step, 1.0, 1.0))
+        conn.execute("PRAGMA user_version = 2")
+    monkeypatch.setattr(main_module, "DB_PATH", path)
+    main_module.init_db()
+    main_module.init_db()
+    with main_module.db() as conn:
+        sources = {row["id"]: row["source"] for row in conn.execute("SELECT id, source FROM macros")}
+        assert sources == {"a": "assistant", "b": "assistant", "c": "you"}
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_fresh_sample_gestures_use_correct_finger_ids(tmp_path, monkeypatch):
