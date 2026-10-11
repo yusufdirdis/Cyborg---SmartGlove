@@ -47,7 +47,7 @@
 @media(max-width:760px){.vision-settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.vision-settings-grid .vision-url{grid-column:1/-1}.vision-component-status{width:100%;margin:3px 0 0}.vision-stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:600px){.vision-settings-grid{grid-template-columns:1fr}.vision-settings-grid .vision-url{grid-column:auto}.vision-results{grid-template-columns:1fr}.vision-results .card:last-child{grid-column:auto}.vision-stream{min-height:210px}.vision-view-switch{width:100%}.vision-view-switch button{flex:1;padding:8px 7px;font-size:9px}.vision-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .stage-head{align-items:center;gap:10px}.hand-source{display:flex;gap:3px;background:#f2f5f0;border-radius:20px;padding:3px}.hand-source button{border:0;background:transparent;color:#8a968b;font-size:10px;font-weight:800;letter-spacing:.06em;padding:5px 10px;border-radius:16px}.hand-source button.on{background:#fff;color:#2b362e;box-shadow:0 1px 2px #1a2a1f1f}
-.hand-3d{position:absolute;inset:0;transition:opacity .3s}.hand-3d canvas{cursor:grab}.hand-3d canvas:active{cursor:grabbing}
+.hand-3d{position:absolute;inset:0;transition:opacity .2s}.hand-3d canvas{cursor:grab}.hand-3d canvas:active{cursor:grabbing}
 .hand-overlay{position:absolute;left:50%;bottom:44px;transform:translateX(-50%);max-width:88%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#ffffffeb;border:1px solid #e3e8e1;border-radius:24px;padding:8px 13px;color:#657368;font-size:11px;font-weight:700}
 .hand-badge{position:absolute;right:14px;bottom:10px;background:#fff0d8;color:#976a20;padding:6px 9px;border-radius:4px;font-size:9px;letter-spacing:.08em;font-weight:800;text-transform:uppercase}
 
