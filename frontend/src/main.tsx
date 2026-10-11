@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {Anchor, ArrowUpRight, Camera, Check, Cpu, Hand, LayoutDashboard, Menu, MessageSquare, Mic, MicOff, Pause, Pencil, PhoneOff, Play, Plus, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, Volume2, X, type LucideIcon} from 'lucide-react'
+import {Anchor, ArrowUpRight, Camera, Check, Cpu, Eraser, Hand, LayoutDashboard, Menu, MessageSquare, Mic, MicOff, Pause, Pencil, PhoneOff, Play, PlugZap, Plus, RefreshCw, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, Volume2, X, type LucideIcon} from 'lucide-react'
 import {Canvas, useFrame, useThree} from '@react-three/fiber'
 import * as THREE from 'three'
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js'
@@ -55,7 +55,7 @@ function App(){
  const play=async(m:Macro)=>{await action(()=>api(`/macros/${m.id}/play`,{method:'POST'}),`Playing ${m.name} in simulation`)}
  const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:HardwareStop}>('/control/stop',{method:'POST'}));if(result){cancelPendingProposals();setNotice(stopNotice(result))}}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
- const nav:[Page,LucideIcon,string][]=[['Dashboard',LayoutDashboard,'overview'],['Macro Studio',Hand,'macro'],['Manual Control',SlidersHorizontal,'manual'],['AI Vision',Camera,'vision'],['AI Assistant',MessageSquare,'assistant'],['Devices',Cpu,'devices'],['Settings',Settings,'settings']]
+ const nav:[Page,LucideIcon,string][]=[['Dashboard',LayoutDashboard,'overview'],['Macro Studio',Hand,'macro'],['Manual Control',SlidersHorizontal,'manual'],['AI Vision',Camera,'vision'],['AI Assistant',MessageSquare,'assistant'],['Settings',Settings,'settings']]
  const navigate=(next:Page)=>{setPage(next);setMenuOpen(false);setNotice('');window.scrollTo({top:0,behavior:'smooth'})}
  return <div className="app-layout">
   <aside className={`app-sidebar ${menuOpen?'open':''}`}>
@@ -76,14 +76,13 @@ function App(){
     {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} cal={cal} refresh={refresh} action={action} play={play} manual={Object.fromEntries(allServoIds.map(id=>[id,hardware?.servos.find(servo=>servo.id===id)?.position??(status.positions[id]??0)*40]))}/>}
     {page==='AI Vision'&&<Vision/>}
     {page==='AI Assistant'&&<Assistant macros={macros} action={action} setNotice={setNotice} setError={setError}/>}
-    {page==='Devices'&&<Devices status={status} hardware={hardware} scan={scanHardware}/>}
-    {page==='Settings'&&<SettingsPage action={action}/>}
+    {page==='Settings'&&<div className="settings-stack"><h2 className="settings-section-title">Devices</h2><Devices status={status} hardware={hardware} scan={scanHardware}/><h2 className="settings-section-title">Gemini</h2><SettingsPage action={action}/></div>}
    </main>
   </div>
  <LiveButton macros={macros} setNotice={setNotice}/>
  </div>
 }
-const subtitles:Record<Page,string>={Settings:'Connect AI providers for the assistant. Keys stay on the local server.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Run local object detection and hand tracking from your camera.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
+const subtitles:Record<Page,string>={Settings:'Connected devices and your Gemini API key. The key stays on this computer.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Run local object detection and hand tracking from your camera.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[10px] uppercase tracking-[.13em] text-[#63796a] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 // 3D model of the real glove, seen from the back of a right hand (thumb on the left). The black cord guides,
@@ -287,21 +286,21 @@ function SettingsPage({action}:{action:ManualAction}){
  const clear=async(p:ProviderSetting)=>{setBusy(p.name);try{const row=await action(()=>api<ProviderSetting>(`/settings/providers/${p.name}/key`,{method:'DELETE'}),`${p.label} key cleared`);if(row)replace(row)}finally{setBusy('');setClearing('')}}
  const test=async(p:ProviderSetting)=>{if(dirty(p)){const row=await save(p);if(!row?.key_set)return};setTests(t=>({...t,[p.name]:'testing'}));const result=await action(()=>api<ProviderTest>(`/settings/providers/${p.name}/test`,{method:'POST'}));setTests(t=>({...t,[p.name]:result??{ok:false,message:'Test request failed',latency_ms:null}}))}
  return <div className="space-y-5 max-w-[860px]">
-  <div className="card p-5"><Eyebrow>AI providers</Eyebrow><p className="text-xs text-[#63796a] mt-2">Keys are saved on the server in backend/.env and are never shown again; only the last four characters appear. The Offline provider needs no key. Changes apply immediately.</p></div>
-  {rows.map(p=>{const result=tests[p.name];return <div key={p.name} className="card p-5">
-   <div className="flex flex-wrap justify-between items-center gap-2"><div className="font-bold text-sm">{p.label}</div><Pill tone={p.key_set?'green':'gray'}>{p.key_set?`Key set ${p.key_hint??''}`:'No key'}</Pill></div>
+  {rows.filter(p=>p.name==='gemini').map(p=>{const result=tests[p.name];return <div key={p.name} className="card p-5">
+   <div className="flex flex-wrap justify-between items-start gap-2"><div><div className="font-bold text-[15px]">Gemini API key</div><div className="text-xs text-[#63796a] mt-1">Powers the assistant in Macro Studio and Gemini Live.</div></div><Pill tone={p.key_set?'green':'gray'}>{p.key_set?`Key saved · ${p.key_hint??''}`:'No key'}</Pill></div>
    <div className="grid sm:grid-cols-2 gap-3 mt-4">
     <label className="text-xs font-bold text-[#6b7f72]">API key<input className="field mt-1 w-full" type="password" autoComplete="off" spellCheck={false} maxLength={500} placeholder={p.key_set?`Paste new key to replace ${p.key_hint??''}`:'Paste new key'} value={keys[p.name]??''} onChange={e=>setKeys(k=>({...k,[p.name]:e.target.value}))}/></label>
     <label className="text-xs font-bold text-[#6b7f72]">Model<input className="field mt-1 w-full" spellCheck={false} maxLength={200} placeholder={p.default_model} value={models[p.name]??''} onChange={e=>setModels(m=>({...m,[p.name]:e.target.value}))}/></label>
    </div>
    <div className="flex flex-wrap items-center gap-2 mt-4">
-    <button className="btn btn-primary" disabled={busy===p.name} onClick={()=>save(p)}>Save</button>
-    <button className="btn btn-secondary" disabled={busy===p.name||result==='testing'||(!p.key_set&&!draftKey(p))} title={!p.key_set&&!draftKey(p)?'Paste a key first':undefined} onClick={()=>test(p)}>{result==='testing'?'Testing…':dirty(p)?'Save & test':'Test'}</button>
-    {p.key_set&&(clearing===p.name?<><span className="text-xs text-[#63796a]">Remove the saved {p.label} key?</span><button className="btn btn-secondary" disabled={busy===p.name} onClick={()=>clear(p)}>Yes, clear key</button><button className="btn btn-secondary" onClick={()=>setClearing('')}>Keep</button></>:<button className="btn btn-secondary" disabled={busy===p.name} onClick={()=>setClearing(p.name)}>Clear key</button>)}
+    <button className="btn btn-primary" disabled={busy===p.name} onClick={()=>save(p)}><Save size={15}/> Save key</button>
+    <button className="btn btn-secondary" disabled={busy===p.name||result==='testing'||(!p.key_set&&!draftKey(p))} title={!p.key_set&&!draftKey(p)?'Paste a key first':undefined} onClick={()=>test(p)}><PlugZap size={15}/> {result==='testing'?'Testing…':dirty(p)?'Save & test':'Test'}</button>
+    {p.key_set&&(clearing===p.name?<><span className="text-xs text-[#63796a] ml-auto">Remove the saved Gemini key?</span><button className="btn btn-danger-solid" disabled={busy===p.name} onClick={()=>clear(p)}><Eraser size={15}/> Yes, clear key</button><button className="btn btn-secondary" onClick={()=>setClearing('')}>Keep</button></>:<button className="btn btn-secondary btn-icon btn-danger ml-auto" aria-label="Clear Gemini key" title="Clear key" disabled={busy===p.name} onClick={()=>setClearing(p.name)}><Eraser size={16}/></button>)}
    </div>
    {result&&result!=='testing'&&<p className={`text-xs mt-3 font-bold ${result.ok?'text-[#247658]':'text-[#b4533f]'}`}>{result.ok?`OK · ${result.latency_ms} ms · ${result.message}`:result.message}</p>}
    {!p.key_set&&!draftKey(p)&&<p className="text-[11px] text-[#63796a] mt-2">Paste a key to enable Test.</p>}
    <p className="text-[11px] text-[#63796a] mt-2">Using model {p.model}{p.model===p.default_model?' (default)':''}. Leave Model empty to use the default.</p>
+   <p className="text-[11px] text-[#63796a] mt-1">The key is saved in backend/.env and never shown again; only the last four characters appear.</p>
   </div>})}
  </div>
 }
@@ -766,13 +765,14 @@ function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|n
  return <div className="space-y-5">
   <div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#63796a] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div>
   <div className="card p-5 max-w-[1040px]">
-   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#63796a] mt-1">Arranged like your photo, with the glove above the servo mount. Positions are raw counts; saved travel limits remain active.</p></div><button className="btn btn-secondary" onClick={scan}>Refresh status</button></div>
+   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#63796a] mt-1">One row per servo, in ID order. Positions are raw counts out of 4000; saved travel limits remain active.</p></div><button className="btn btn-secondary btn-expand" aria-label="Refresh status" onClick={scan}><RefreshCw size={16}/><span className="btn-label" aria-hidden="true">Refresh status</span></button></div>
    {hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}
    {hardware?.port&&<p className="text-xs text-[#63796a] mt-4">Controller: {hardware.port}</p>}
-   <div className="grid md:grid-cols-2 gap-2 mt-4">{servoMounts.map(({id,location})=>{
-    const servo=hardware?.servos.find(item=>item.id===id)
-    return <div key={id} className="rounded-xl border border-[#e8ece8] px-4 py-3 flex justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.12em] font-bold text-[#63796a]">{location}</div><b className="text-sm">ID {id}</b><span className="text-xs text-[#63796a] ml-2">{servos[id-1]}</span></div><div className="text-right text-xs text-[#63796a]">{servo?<><b className="text-[#1e4937]">{servo.position??'—'} counts</b><div>{servo.voltage_v?.toFixed(1)??'—'} V · {servo.temperature_c??'—'}°C</div><div>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`} · {servo.torque_enabled==null?'Torque unknown':servo.torque_enabled?'Torque on':'Torque off'}</div></>:<span>No response</span>}</div></div>
+   <div className="servo-table mt-4" role="table" aria-label="Servo status"><div className="servo-row servo-head" role="row"><span role="columnheader">Servo</span><span role="columnheader">Finger · mount</span><span role="columnheader" className="num">Position</span><span role="columnheader" className="num">Voltage</span><span role="columnheader" className="num">Temp</span><span role="columnheader" className="mid">Torque</span></div>{allServoIds.map(id=>{
+    const servo=hardware?.servos.find(item=>item.id===id),location=servoMounts.find(mount=>mount.id===id)?.location??''
+    return <div key={id} className="servo-row" role="row"><span role="cell"><span className="servo-id">{String(id).padStart(2,'0')}</span></span><span role="cell" className="servo-name"><b>{servos[id-1]}</b><small>{location}</small></span>{servo?<><span role="cell" className="num servo-pos"><span><b>{servo.position??'—'}</b><small> / 4000</small></span><i className="channel-meter"><i style={{width:`${servo.position==null?0:Math.max(0,Math.min(100,servo.position/maxServoCount*100))}%`}}/></i></span><span role="cell" className="num"><b>{servo.voltage_v?.toFixed(1)??'—'}</b><small> V</small></span><span role="cell" className="num"><b>{servo.temperature_c??'—'}</b><small> °C</small></span><span role="cell" className="mid servo-torque"><span className={`torque-chip${servo.torque_enabled===true?' on':''}`}>{servo.torque_enabled==null?'Unknown':servo.torque_enabled?'On':'Off'}</span><small>{servo.mode===0?'Position mode':servo.mode==null?'Mode unknown':`Mode ${servo.mode}`}</small></span></>:<span role="cell" className="servo-missing">No response</span>}</div>
    })}</div>
+   {!!hardware&&<p className="text-xs text-[#63796a] mt-3">Last read {new Date(hardware.checked_at*1000).toLocaleTimeString()}</p>}
    <p className="text-xs text-[#63796a] mt-4">Status reads do not move the glove. Direct position controls are on Manual Control; saved gestures still run in simulation.</p>
   </div>
  </div>

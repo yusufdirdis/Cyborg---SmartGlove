@@ -121,3 +121,21 @@
 .torque-chip{display:inline-flex;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;background:#edf0ed;color:#5f6f65}
 .torque-chip.on{background:#e3f7e8;color:#247658}
 
+/* — handoff UI/UX redesign: settings + devices — */
+.settings-stack{display:flex;flex-direction:column;gap:14px;max-width:1040px}
+.settings-section-title{font-size:20px;letter-spacing:-.045em;margin:6px 0 0}
+.settings-stack .space-y-5{max-width:none}
+.servo-table{border:1px solid #e6ebe5;border-radius:12px;overflow:hidden}
+.servo-row{display:grid;grid-template-columns:52px minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,.8fr) minmax(0,.8fr) 112px;align-items:center;gap:16px;padding:12px 18px;border-top:1px solid #f0f2ef;font-size:13px}
+.servo-head{border-top:0;background:#f7f9f8;padding:10px 18px;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#63796a}
+.servo-row .num{text-align:right;font-variant-numeric:tabular-nums}
+.servo-row .mid{display:flex;flex-direction:column;align-items:center;gap:3px;text-align:center}
+.servo-row small{font-size:11px;color:#63796a;font-weight:400}
+.servo-id{width:30px;height:30px;border-radius:50%;background:#edf6ef;color:#247658;font-size:12px;font-weight:800;display:grid;place-items:center}
+.servo-name{display:flex;flex-direction:column;gap:2px;min-width:0}
+.servo-name b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.servo-pos{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.servo-pos .channel-meter{display:block;width:100%;max-width:140px}
+.servo-missing{grid-column:3/-1;color:#63796a;font-size:12px}
+@media(max-width:760px){.servo-row{grid-template-columns:40px minmax(0,1fr) auto;row-gap:6px}.servo-head{display:none}.servo-row>span:nth-child(n+4){grid-column:2/-1;text-align:left;align-items:flex-start}.servo-pos{align-items:flex-start}}
+
