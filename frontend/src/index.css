@@ -99,3 +99,25 @@
 @keyframes nav-flash{0%{opacity:0;transform:scale(.4)}15%{opacity:1;transform:scale(1.15)}100%{opacity:0;transform:scale(1.9)}}
 .sidebar-nav .nav-settings.active svg{animation:nav-spin .9s cubic-bezier(.4,0,.2,1)}
 @keyframes nav-spin{to{transform:rotate(720deg)}}
+
+/* — handoff UI/UX redesign: torque readiness — */
+.torque-strip{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;padding:16px 20px;border:1px solid #e6ebe5;border-radius:16px;background:#fff}
+.torque-copy{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:4px}
+.torque-copy b{font-size:15px;letter-spacing:-.02em}
+.torque-copy span{font-size:12px;line-height:1.45;color:#63796a}
+.torque-progress{flex:1.4 1 300px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.torque-track{position:relative;height:28px;margin-left:30px}
+.torque-track i{position:absolute;display:block}
+.torque-rail{left:0;right:0;top:12px;height:4px;border-radius:2px;background:#edf0ed}
+.torque-fill{left:0;top:12px;height:4px;border-radius:2px;background:#d9876d;transition:width .2s ease-out}
+.torque-notch{top:10px;width:2px;height:8px;background:#fff}
+.torque-hand-wrap{position:absolute;top:4px;width:34px;height:20px;margin-left:-32px;transition:left .2s ease-out}
+.torque-hand{display:block;overflow:visible}
+.torque-hand.nudging{animation:torque-nudge .6s ease-in-out infinite alternate}
+@keyframes torque-nudge{from{transform:translateX(-2px)}to{transform:translateX(2px)}}
+.torque-stages{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-left:30px;font-size:10px;font-weight:700;letter-spacing:.04em;color:#63796a}
+.torque-stages .done{color:#247658}.torque-stages .current{color:#18201d;font-weight:800}
+.torque-strip .btn{margin-left:auto}
+.torque-chip{display:inline-flex;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;background:#edf0ed;color:#5f6f65}
+.torque-chip.on{background:#e3f7e8;color:#247658}
+
