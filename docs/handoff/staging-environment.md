@@ -1,12 +1,12 @@
 # Agent handoff: set up a staging (testing) environment with the Railway and Vercel CLIs
 
 **Audience:** the agent working for the teammate who owns the Vercel and Railway accounts.
-**Goal:** a separate, short-lived test copy of the site that runs **branch `feat/onlineHardware`** (online glove bridge, vision, one-click macros) **without touching production** (`givemeahand.fit`, `api.givemeahand.fit`, branch `feat/deploy`).
+**Goal:** a separate, short-lived test copy of the site that runs **branch `feat/onlineHardware`** (online glove bridge, vision, one-click macros) **without changing production's deployment** (`givemeahand.fit`, `api.givemeahand.fit`, branch `feat/deploy`). Staging shares production's data on purpose.
 **Cost:** Railway bills by the minute (a few minutes is under $0.01; a forgotten day is about $0.15–0.50). Stop it when testing is done (§5). Vercel previews are free.
 
 ## 0. What already exists (done by the owner)
-- **Database:** the Supabase schema **`handoff_staging`** is created in the same project. It is separate from production's `handoff` tables and already accessible to the same `handoff_app` login. It starts with 5 sample macros on first API start.
-- **Same database URL:** staging uses the same `SUPABASE_DB_URL` as production, plus `HANDOFF_DB_SCHEMA=handoff_staging`. Copy the URL from production's Railway variables; never print it.
+- **Database:** staging uses the **same Supabase data as production** (schema `handoff`, the default), on the owner's decision. Macros, calibration and logs are shared, so a macro created or deleted on staging also appears on the live site. Log rows from staging are tagged `instance = staging`.
+- **Same database URL:** staging uses the same `SUPABASE_DB_URL` as production. Copy it from production's Railway variables, never print it, and **don't set `HANDOFF_DB_SCHEMA`**.
 - **Code:** `feat/onlineHardware` on GitHub. Tests: `cd backend && python -m pytest -q` gives 176 passed, 2 skipped.
 
 ## 1. Production must not change. Read this first
@@ -33,7 +33,7 @@ In the **staging** environment, configure service `handoff-api`:
 | Variable | Staging value |
 |---|---|
 | `SUPABASE_DB_URL` | same as production (secret, don't print) |
-| `HANDOFF_DB_SCHEMA` | `handoff_staging` |
+| `HANDOFF_DB_SCHEMA` | **unset** (shared `handoff` data) |
 | `HANDOFF_CLOUD` | `1` |
 | `HANDOFF_INSTANCE` | `staging` |
 | `HANDOFF_LIVE_POSITIONS` | `0` |
@@ -62,12 +62,12 @@ Use the **stable branch URL**, not a one-off deployment URL, as `$STAGING_WEB`. 
 ## 4. Verify (report every result)
 **Staging**
 - [ ] `curl $STAGING_API/api/health` returns `{"ok":true}`.
-- [ ] `curl $STAGING_API/api/macros` lists the staging sample macros (Open hand, Gentle fist, Point, Pinch, Peace sign), **not** production's list.
+- [ ] `curl $STAGING_API/api/macros` returns the **same** macros as `https://api.givemeahand.fit/api/macros` (shared data).
 - [ ] `curl $STAGING_API/api/status` includes `"bridge":{"online":false,...}`.
 - [ ] `curl -X POST -H 'Content-Type: application/json' $STAGING_API/api/hardware/live -d '{"moves":[{"servo_id":1,"target":2000,"speed":100}]}'` returns **403** ("The glove is offline…").
 - [ ] `curl -X POST $STAGING_API/api/control/stop` returns 200, then `/api/control/reset` returns 200.
 - [ ] A CORS preflight from `Origin: $STAGING_WEB` is allowed, and one from `https://evil.example` is rejected.
-- [ ] `$STAGING_WEB` loads, shows "Real glove offline. The bridge on the laptop is not connected.", and Macro Studio shows the staging macros.
+- [ ] `$STAGING_WEB` loads, shows "Real glove offline. The bridge on the laptop is not connected.", and Macro Studio shows the same macros as production.
 - [ ] The staging JS bundle contains `$STAGING_API`, not `api.givemeahand.fit`.
 
 **Production unchanged**
@@ -77,13 +77,13 @@ Use the **stable branch URL**, not a one-off deployment URL, as `$STAGING_WEB`. 
 
 ## 5. Owner's glove test against staging (for reference; the owner runs this)
 On the laptop with the glove:
-1. Local API: `HANDOFF_DB_SCHEMA=handoff_staging uvicorn app.main:app --host 127.0.0.1 --port 8000`, with `SUPABASE_DB_URL` from `backend/.env`, so macro IDs match staging.
+1. Local API: `uvicorn app.main:app --host 127.0.0.1 --port 8000`, with `SUPABASE_DB_URL` from `backend/.env` (the shared data, so macro IDs match).
 2. Bridge: `HANDOFF_BRIDGE_TOKEN=<staging token> python -m app.bridge --url wss://<STAGING_API host>/ws/bridge`.
 3. Open http://127.0.0.1:8765, arm, and give the code to whoever drives from `$STAGING_WEB`. Do a supervised, off-body test.
 
 ## 6. Tear down after testing (stops the cost)
 - Remove the staging deployment (`railway down --environment staging --service handoff-api`; check `--help`), or delete the `staging` environment. Production is unaffected either way.
-- The `handoff_staging` schema can stay; it costs nothing. Vercel previews can stay.
+- Vercel previews can stay. Nothing in the database needs cleanup. Test macros created on staging are real shared data, so delete them in Macro Studio if they shouldn't stay on the live site.
 
 ## Rules
 - Never print, commit or paste secrets: `SUPABASE_DB_URL`, bridge tokens, AI keys.
