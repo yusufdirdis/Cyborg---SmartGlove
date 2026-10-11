@@ -61,6 +61,7 @@ class MacroInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str = Field(default="", max_length=240)
     kind: Literal["pose", "sequence"]
+    source: Literal["you", "assistant"] = "you"
     steps: list[Step] = Field(min_length=1, max_length=30)
 
     @model_validator(mode="after")
@@ -91,11 +92,6 @@ class CalibrationInput(BaseModel):
         return self
 
 
-class ImportPayload(BaseModel):
-    version: Literal[1, 2, 3]
-    macros: list[MacroInput] = Field(max_length=100)
-
-
 def db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -103,10 +99,22 @@ def db():
     return conn
 
 
+SAMPLES = [
+    ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
+    ("Gentle fist", "A light, even curl", [75, 75, 75, 75, 75, 65]),
+    ("Point", "Index extended, other fingers curled", [80, 80, 80, 0, 75, 55]),
+    ("Pinch", "Thumb meets index", [0, 0, 0, 45, 55, 75]),
+    ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
+]
+SAMPLE_MACROS = [(name, description) for name, description, _ in SAMPLES]
+
+
 def init_db():
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS calibration (servo_id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
+        if "source" not in {row[1] for row in conn.execute("PRAGMA table_info(macros)")}:
+            conn.execute("ALTER TABLE macros ADD COLUMN source TEXT NOT NULL DEFAULT 'you'")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             for row in list(conn.execute("SELECT id, steps FROM macros")):
@@ -123,16 +131,15 @@ def init_db():
                     step["positions"] = {str(sid): int(value) * 40 for sid, value in step["positions"].items()}
                 conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(steps), row["id"]))
             conn.execute("PRAGMA user_version = 2")
+        if version < 3:
+            # Origin labels: the five built-in samples and assistant saves are "From the assistant".
+            for name, description in SAMPLE_MACROS:
+                conn.execute("UPDATE macros SET source='assistant' WHERE name=? AND description=?", (name, description))
+            conn.execute("UPDATE macros SET source='assistant' WHERE description='Saved from AI assistant'")
+            conn.execute("PRAGMA user_version = 3")
         if conn.execute("SELECT COUNT(*) FROM macros").fetchone()[0] == 0:
-            samples = [
-                ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
-                ("Gentle fist", "A light, even curl", [75, 75, 75, 75, 75, 65]),
-                ("Point", "Index extended, other fingers curled", [80, 80, 80, 0, 75, 55]),
-                ("Pinch", "Thumb meets index", [0, 0, 0, 45, 55, 75]),
-                ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
-            ]
-            for name, description, values in samples:
-                save_macro(conn, MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, [v * 40 for v in values])), duration_ms=700)]))
+            for name, description, values in SAMPLES:
+                save_macro(conn, MacroInput(name=name, description=description, kind="pose", source="assistant", steps=[Step(positions=dict(zip(SERVO_NAMES, [v * 40 for v in values])), duration_ms=700)]))
         for sid in SERVO_NAMES:
             conn.execute("INSERT OR IGNORE INTO calibration VALUES (?,?)", (sid, json.dumps({"open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": False, "jog_limits_verified": False})))
 
@@ -140,13 +147,14 @@ def init_db():
 def save_macro(conn, macro: MacroInput, macro_id: str | None = None):
     now = time.time()
     macro_id = macro_id or str(uuid4())
-    current = conn.execute("SELECT created_at FROM macros WHERE id=?", (macro_id,)).fetchone()
-    conn.execute("INSERT OR REPLACE INTO macros VALUES (?,?,?,?,?,?,?)", (macro_id, macro.name.strip(), macro.description, macro.kind, json.dumps([s.model_dump() for s in macro.steps]), current[0] if current else now, now))
+    current = conn.execute("SELECT created_at, source FROM macros WHERE id=?", (macro_id,)).fetchone()
+    source = current[1] if current else macro.source  # editing never changes who made a macro
+    conn.execute("INSERT OR REPLACE INTO macros (id, name, description, kind, steps, created_at, updated_at, source) VALUES (?,?,?,?,?,?,?,?)", (macro_id, macro.name.strip(), macro.description, macro.kind, json.dumps([s.model_dump() for s in macro.steps]), current[0] if current else now, now, source))
     return macro_id
 
 
 def macro_row(row):
-    return {"id": row["id"], "name": row["name"], "description": row["description"], "kind": row["kind"], "steps": json.loads(row["steps"]), "created_at": row["created_at"], "updated_at": row["updated_at"]}
+    return {"id": row["id"], "name": row["name"], "description": row["description"], "kind": row["kind"], "source": row["source"], "steps": json.loads(row["steps"]), "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
 
 class SimulationAdapter:
@@ -522,26 +530,6 @@ def delete_macro(macro_id: str):
             raise HTTPException(404, "Macro not found")
 
 
-@app.get("/api/macros/export")
-def export_macros():
-    return {"version": 3, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
-
-
-@app.post("/api/macros/import")
-def import_macros(payload: ImportPayload):
-    with db() as conn:
-        for macro in payload.macros:
-            data = macro.model_dump()
-            if payload.version == 1:
-                for step in data["steps"]:
-                    step["positions"] = remap_legacy_positions(step["positions"])
-            if payload.version in (1, 2):
-                for step in data["steps"]:
-                    step["positions"] = {str(sid): int(value) * 40 for sid, value in step["positions"].items()}
-            save_macro(conn, MacroInput.model_validate(data))
-    return {"imported": len(payload.macros)}
-
-
 @app.post("/api/macros/{macro_id}/play")
 async def play_macro(macro_id: str):
     with db() as conn:
@@ -765,7 +753,7 @@ def save_macro_from_command(command: assistant.Command) -> dict:
             save_macro(conn, payload, row["id"])
             saved_row = conn.execute("SELECT * FROM macros WHERE id=?", (row["id"],)).fetchone()
         else:
-            payload = MacroInput(name=command.name, description="Saved from AI assistant", kind="pose" if len(steps) == 1 else "sequence", steps=steps)
+            payload = MacroInput(name=command.name, description="Saved from AI assistant", kind="pose" if len(steps) == 1 else "sequence", source="assistant", steps=steps)
             saved_row = conn.execute("SELECT * FROM macros WHERE id=?", (save_macro(conn, payload),)).fetchone()
     return {"saved": True, "mode": "saved", "macro": macro_row(saved_row)}
 

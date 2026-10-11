@@ -48,7 +48,7 @@ The React dashboard's **AI Vision** page connects to the local vision service. C
 Vision APIs are documented in [`backend/app/vision/README.md`](backend/app/vision/README.md). Imitation values are simulation-only normalized estimates and have no connection to physical servo command routes.
 
 
-On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 3 JSON file with raw 0–4000 counts; older version 1 and 2 exports are converted when imported. Existing saved percentages are migrated to counts once. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
+On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macros store raw 0–4000 counts; existing saved percentages are migrated to counts once. Macro import and export were removed in the UI/UX redesign. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
 
 ## Try the first milestone
 
