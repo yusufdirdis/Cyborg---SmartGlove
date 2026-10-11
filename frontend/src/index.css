@@ -161,3 +161,23 @@
 @media(max-width:1199px){.control-left{grid-template-columns:1fr}.control-workspace.manual-open{grid-template-columns:1fr}}
 @media(max-width:700px){.overview-manual .manual-grid{grid-template-columns:1fr}}
 
+/* — handoff UI/UX redesign: Overview synced modes — */
+.stage-reset{position:absolute;right:12px;bottom:8px;z-index:2}
+.hand-diagram .stage-reset svg{width:14px;height:14px;max-width:none}
+@media(max-width:600px){.hand-diagram:has(.stage-reset) .diagram-label{display:none}}
+.mode-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+.mode-pill i{width:7px;height:7px;border-radius:50%;display:block}
+.mode-pill.sim{background:#e3f7e8;color:#247658}.mode-pill.sim i{background:#65a374}
+.mode-pill.live{background:#171d19;color:#fff}.mode-pill.live i{background:#65a374}
+.mode-pill.off{background:#edf0ed;color:#5f6f65}.mode-pill.off i{background:#9aa89e}
+.gestures-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;margin-left:auto}
+.overview-gesture-scroll{max-height:372px;overflow-y:auto;padding:2px;margin:24px 0 0}
+.overview-gesture-scroll .overview-gesture-grid{margin:0}
+@media(max-width:600px){.overview-gesture-scroll .overview-gesture-grid{grid-template-columns:minmax(0,1fr)}.overview-gesture.physical{flex-wrap:wrap}.overview-gesture.physical>button{margin-left:auto}}
+.overview-gesture.physical{border-color:#cfd8d0;cursor:default}
+.overview-gesture.physical:hover{background:#fff;border-color:#cfd8d0}
+.overview-gesture small{display:block}
+.overview-gesture>span:nth-child(2){min-width:0}
+.overview-gesture>svg,.overview-gesture>button{flex:none}
+
+.manual-open .hand-stage .hand-photo-stage{height:auto;flex:1 1 auto;min-height:300px}
