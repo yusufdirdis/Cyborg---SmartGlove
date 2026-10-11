@@ -217,3 +217,9 @@
 .spin{animation:nav-spin 1.6s linear infinite}
 @media(max-width:760px){.vision-settings-grid,.vision-settings-row{grid-template-columns:1fr}}
 
+/* — handoff UI/UX redesign: online demo — */
+.local-only{display:flex;gap:12px;align-items:flex-start;padding:18px 20px;max-width:760px;background:#f5f7f6}
+.local-only svg{flex:none;color:#63796a;margin-top:1px}
+.local-only b{font-size:14px}
+.local-only p{margin:4px 0 0;font-size:12px;line-height:1.5;color:#4f6658}
+
