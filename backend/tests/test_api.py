@@ -194,3 +194,21 @@ def test_read_only_hardware_status_uses_six_ids_and_never_writes(monkeypatch):
     assert all(servo["mode"] == 0 and servo["torque_enabled"] is True for servo in response.json()["servos"])
     assert [entry[1] for entry in calls if entry[0] == "ping"] == list(range(1, 7))
     assert calls[-1] == ("close",)
+
+
+def test_calibration_export_includes_saved_values_and_live_snapshot(monkeypatch):
+    from app import servo_status
+
+    reading = {"connected": True, "port": "/dev/fake", "error": None, "servos": [
+        {"id": 1, "model": 777, "position": 1017, "voltage_v": 12.4, "temperature_c": 38,
+         "moving": False, "mode": 0, "torque_enabled": True}]}
+    monkeypatch.setattr(servo_status, "scan_servos", lambda: reading)
+    with TestClient(app) as client:
+        data = client.get("/api/calibration/export").json()
+    assert data["version"] == 1 and data["exported_at"] and data["controller"]["port"] == "/dev/fake"
+    assert [s["servo_id"] for s in data["servos"]] == [1, 2, 3, 4, 5, 6]
+    first = data["servos"][0]
+    assert {"open_count", "closed_count", "min_count", "max_count", "direction", "verified"} <= first.keys()
+    assert first["live"] == {"position": 1017, "torque_enabled": True, "moving": False, "mode": 0,
+                             "voltage_v": 12.4, "temperature_c": 38}
+    assert data["servos"][1]["live"] is None  # servo 2 did not answer the fake scan

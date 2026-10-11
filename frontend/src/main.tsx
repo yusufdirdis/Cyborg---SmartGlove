@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {Anchor, ArrowUpRight, Camera, Check, CircleAlert, Cpu, Eraser, Hand, LayoutDashboard, Lock, Menu, Mic, MicOff, Pause, Pencil, PhoneOff, Play, PlugZap, Plus, RefreshCw, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, User, Volume2, X, type LucideIcon} from 'lucide-react'
+import {ArrowDownToLine, Anchor, ArrowUpRight, Camera, Check, CircleAlert, Cpu, Eraser, Hand, LayoutDashboard, Lock, Menu, Mic, MicOff, Pause, Pencil, PhoneOff, Play, PlugZap, Plus, RefreshCw, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, User, Volume2, X, type LucideIcon} from 'lucide-react'
 import {Canvas, useFrame, useThree} from '@react-three/fiber'
 import * as THREE from 'three'
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js'
@@ -784,6 +784,7 @@ function Vision(){
  </div>
 }
 function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
+ const exportCalibration=async()=>{try{const data=await api('/calibration/export');const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`handoff-calibration-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url)}catch(e){alert(`Could not export calibration: ${e instanceof Error?e.message:String(e)}`)}}
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'
  const items=[
   {name:'Servo controller',state:controllerState,detail:'USB connection and live position',Icon:Cpu},
@@ -792,7 +793,7 @@ function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|n
  return <div className="space-y-5">
   <div className="device-list">{items.map(({name,state,detail,Icon})=><div key={name} className="card p-5 flex items-center gap-4"><div className="p-3 rounded-xl bg-[#edf6ef] text-teal"><Icon size={22}/></div><div className="flex-1"><div className="font-bold">{name}</div><div className="text-xs text-[#63796a] mt-1">{detail}</div></div><Pill tone={state.trim().toLowerCase()==='connected'?'green':hardware?.port&&name==='Servo controller'?'amber':'gray'}>{state}</Pill></div>)}</div>
   <div className="card p-5 max-w-[1040px]">
-   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#63796a] mt-1">One row per servo, in ID order. Positions are raw counts out of 4000; saved travel limits remain active.</p></div><button className="btn btn-secondary btn-expand" aria-label="Refresh status" onClick={scan}><RefreshCw size={16}/><span className="btn-label" aria-hidden="true">Refresh status</span></button></div>
+   <div className="flex flex-wrap justify-between gap-3 items-start"><div><Eyebrow>Servo bus</Eyebrow><h2 className="text-xl font-bold mt-1">Live status</h2><p className="text-xs text-[#63796a] mt-1">One row per servo, in ID order. Positions are raw counts out of 4000; saved travel limits remain active.</p></div><div className="flex gap-2"><button className="btn btn-secondary btn-expand" aria-label="Export calibration" onClick={()=>void exportCalibration()}><ArrowDownToLine size={16}/><span className="btn-label" aria-hidden="true">Export calibration</span></button><button className="btn btn-secondary btn-expand" aria-label="Refresh status" onClick={scan}><RefreshCw size={16}/><span className="btn-label" aria-hidden="true">Refresh status</span></button></div></div>
    {hardware?.error&&<p className="text-xs text-[#9b6633] mt-4">{hardware.error}</p>}
    {hardware?.port&&<p className="text-xs text-[#63796a] mt-4">Controller: {hardware.port}</p>}
    <div className="servo-table mt-4" role="table" aria-label="Servo status"><div className="servo-row servo-head" role="row"><span role="columnheader">Servo</span><span role="columnheader">Finger · mount</span><span role="columnheader" className="num">Position</span><span role="columnheader" className="num">Voltage</span><span role="columnheader" className="num">Temp</span><span role="columnheader" className="mid">Torque</span></div>{allServoIds.map(id=>{
