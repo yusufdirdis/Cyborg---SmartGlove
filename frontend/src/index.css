@@ -65,7 +65,6 @@
 .btn-expand:hover,.btn-expand:focus-visible{gap:8px;padding:0 16px}
 .btn-expand:hover .btn-label,.btn-expand:focus-visible .btn-label{max-width:180px;opacity:1}
 @media (hover:none){.btn-expand{gap:8px;padding:0 16px}.btn-expand .btn-label{max-width:180px;opacity:1}}
-.app-content{padding-bottom:120px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 
 /* — handoff UI/UX redesign: shell — */
@@ -222,4 +221,8 @@
 .local-only svg{flex:none;color:#63796a;margin-top:1px}
 .local-only b{font-size:14px}
 .local-only p{margin:4px 0 0;font-size:12px;line-height:1.5;color:#4f6658}
+
+/* — handoff UI/UX redesign: Gemini Live in the top bar — */
+.live-button{min-height:44px;border-radius:22px;padding:0 18px}
+@media(max-width:600px){.live-button{width:44px;padding:0}.live-button .live-text{display:none}.app-header .stop-button{padding:0 14px}}
 
