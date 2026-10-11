@@ -13,7 +13,7 @@ Backend (Python 3.11+). Run from `backend/`:
 ```bash
 python -m venv .venv
 .venv/Scripts/activate          # Windows; use .venv/bin/activate on macOS/Linux
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-vision.txt   # vision file is optional (local camera only)
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 python -m pytest -q                                   # all tests
 python -m pytest -q tests/test_api.py::test_telemetry_connects   # single test
@@ -53,6 +53,8 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
   - Manual Control also stages multi-servo targets. `/api/hardware/group/preview` and `/execute` send one synchronized packet, `/api/hardware/live` handles streamed target edits, and `/api/hardware/torque/enable` aligns stored targets before holding torque. All of them sit behind the same writes flag and health checks.
 - **`backend/app/live_positions.py`** reads present positions for the Dashboard's 3D glove (Simulated / Physical toggle). It is read-only and never enables torque or sends a target. Set `HANDOFF_LIVE_POSITIONS=0` to turn it off; `tests/conftest.py` does this so tests never poll USB.
 - The assistant and Live tools must never call any `/api/hardware/*` write route.
+- **`backend/app/vision/`** is the local YOLO and MediaPipe service (`/api/vision/*`). Its camera routes are local-only and it never sends motion commands; imitation targets are simulation-only. Its heavy libraries live in `backend/requirements-vision.txt`, are imported lazily, and are not installed on the hosted API.
+- **Motor writes:** `HANDOFF_ENABLE_HARDWARE_WRITES` defaults to on for the local API, but `writes_enabled()` always returns False when `HANDOFF_CLOUD=1`. Otherwise Stop and chat would become local-only for public visitors. `tests/test_deploy.py` covers this.
 - **`backend/app/assistant.py`** holds the chat/voice assistant: Gemini, OpenRouter, Hugging Face and Offline providers, the JSON reply contract, and single-use proposals (60 s TTL). `/api/assistant/chat` only drafts proposals; the sole direct action is a stop through `latch_stop()`. `/api/assistant/proposals/{id}/confirm` calls the simulation `control_pose`/`play_macro`. The assistant must never gain a hardware command type; `tests/test_assistant.py` enforces this. `/api/assistant/transcribe` takes a raw audio body (≤ 4 MB) and returns Gemini's transcript text only; it must never trigger motion. The live routes: `/api/assistant/live/session` is local-only unless cloud mode and the demo passcode are enabled; it mints a single-use `v1alpha` ephemeral token with the instruction and tools locked into its constraints. `/api/assistant/live/proposal` validates one Live tool call into the same proposal shape and never moves anything; the Live tools must never include a hardware tool, and `tests/test_live.py` enforces this. Keys load from `backend/.env` (`HANDOS_ENV_FILE` overrides the path; tests use a scratch file). The Settings page uses local `/api/settings/providers` routes to write that file through `set_key` and return masked key hints only; cloud mode blocks those routes so provider keys are managed in Railway variables. Never return a full key.
 - **`frontend/src/main.tsx`** contains the entire UI: types, the `api()` fetch helper, `App`, and every page component (Dashboard, Manual Control, Macro Studio, AI Vision, AI Assistant, Calibration, Devices, Settings).
   - The components are dense one-liners. Match that style rather than splitting files unless asked.

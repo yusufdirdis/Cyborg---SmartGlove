@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import assistant
 from .store import RevisionConflict, StoreUnavailable, make_store
+from .vision.api import router as vision_router
 
 
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
@@ -283,10 +284,12 @@ async def poll_physical_positions():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     from .live_positions import enabled as live_positions_enabled
+    from .vision.service import vision_service
 
     init_db()
     poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
     yield
+    vision_service.stop()
     if poller:
         poller.cancel()
     if sim.task and not sim.task.done():
@@ -356,6 +359,7 @@ async def visitor_provider_keys(request: Request, call_next):
 # Keep CORS outside the passcode middleware so 401/503 responses still carry
 # the headers browsers need to display the passcode gate instead of a fetch error.
 app.add_middleware(CORSMiddleware, allow_origins=allowed_cors_origins(), allow_methods=["*"], allow_headers=["*"])
+app.include_router(vision_router)
 
 
 @app.get("/api/health")
@@ -621,34 +625,18 @@ async def play_macro(macro_id: str):
     return {"accepted": True, "mode": "simulation"}
 
 
-@app.post("/api/macros/{macro_id}/hardware/preview")
-def preview_hardware_macro(macro_id: str, request: Request):
-    from .hardware_control import HardwareControlError, prepare_macro
+@app.post("/api/macros/{macro_id}/hardware/run")
+def run_hardware_macro(macro_id: str, request: Request):
+    from .hardware_control import HardwareControlError, run_macro
 
     _local_hardware_request(request)
     row = store.get_macro(macro_id)
     if row is None:
         raise HTTPException(404, "Macro not found")
     steps = [Step.model_validate(item).model_dump() for item in row["steps"]]
-    try:
-        return prepare_macro(row["name"], _macro_fingerprint(row), steps, sim.stopped)
-    except HardwareControlError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/macros/{macro_id}/hardware/execute")
-def execute_hardware_macro(macro_id: str, payload: JogConfirmInput, request: Request):
-    from .hardware_control import HardwareControlError, execute_macro
-
-    _local_hardware_request(request)
-    row = store.get_macro(macro_id)
-    if row is None:
-        raise HTTPException(404, "Macro not found")
     servo_ids = sorted({int(sid) for step in row["steps"] for sid in step["positions"]})
-    return record_move("macro", servo_ids, {"macro_id": macro_id, "token": payload.token}, lambda: execute_macro(
-        payload.token, payload.phrase, _macro_fingerprint(row), off_body=payload.off_body,
-        power_cut_tested=payload.power_cut_tested, cord_path_clear=payload.cord_path_clear,
-        stopped=sim.stopped, is_stopped=lambda: sim.stopped), payload)
+    return record_move("macro", servo_ids, {"macro_id": macro_id}, lambda: run_macro(
+        row["name"], _macro_fingerprint(row), steps, stopped=sim.stopped, is_stopped=lambda: sim.stopped))
 
 
 @app.post("/api/control/pose")

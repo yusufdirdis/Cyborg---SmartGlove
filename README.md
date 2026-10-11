@@ -27,7 +27,7 @@ Use Python 3.11+ and Node.js 20+ in two terminals.
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-vision.txt   # vision file is optional (local camera only)
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -40,6 +40,12 @@ npm run dev -- --port 5173
 ```
 
 Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>. The Vite server proxies `/api` and `/ws` to the local API. Keep both terminals running.
+
+## Local YOLO and gesture development
+
+The React dashboard's **AI Vision** page connects to the local vision service. Choose an ESP32-S3 stream or webcam, then switch between the raw **Default view** and annotated **Object detection view** while inference continues in the backend. The page shows detections, 21 hand landmarks, gesture estimates, and normalized six-channel imitation. The standalone <http://127.0.0.1:8000/vision/ui> remains available for development and static-image checks. The pretrained YOLO11 nano checkpoint and MediaPipe hand task model load on demand and run locally; the first load downloads their model files. Camera URL and model paths can be configured with the `HANDOFF_*` environment variables described in [`backend/app/vision/README.md`](backend/app/vision/README.md).
+
+Vision APIs are documented in [`backend/app/vision/README.md`](backend/app/vision/README.md). Imitation values are simulation-only normalized estimates and have no connection to physical servo command routes.
 
 
 On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 3 JSON file with raw 0–4000 counts; older version 1 and 2 exports are converted when imported. Existing saved percentages are migrated to counts once. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
@@ -91,9 +97,9 @@ Calibration editing is not exposed in the website. The backend stores calibratio
 
 On 2026-10-10, a supervised terminal test sent one Servo 1 command from 1004 to 1250 at requested speed 2400 and acceleration 50. It settled at 1248 in about 0.5 seconds. This does not establish the speed or safe travel of other channels or simultaneous moves. Start at a lower setting for channels whose response has not been observed. The manufacturer's [STS3215 specifications](https://www.feetechrc.com/525603.html) describe the servo's 12 V position control and higher no-load speed; 2400 is a requested controller speed, not a guarantee of actual glove speed.
 
-Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits, the explicit torque-enable button, or confirmed macro playback to write to motors. Manual Control and macros share the same device-health and Stop checks, raw 0–4000 count range, synchronized packet writer, and default speed of 2400. Macro step duration controls simulation timing only. Macro playback never enables torque automatically or returns home.
+Physical writes are enabled by default when the local API starts. Set `HANDOFF_ENABLE_HARDWARE_WRITES=0` to run the API read-only. Manual Control and macros share the same device-health and Stop checks, raw 0–4000 count range, synchronized packet writer, and default speed of 2400. Macro step duration controls simulation timing only. Macro playback never enables torque automatically or returns home.
 
-When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
+Before sending a motor command, keep the glove off-body, confirm the cord path is clear, and verify the physical power cutoff. To run the API read-only, start it from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=0 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. The software Stop remains available in either mode and blocks movement until reset.
 
 The **Stop** control latches software control. When physical writes are enabled, it also attempts to switch off torque on all six servos. This is a best-effort software action; use the independent physical power cutoff if the glove moves unexpectedly. Resetting the software stop does not re-enable torque. Keep the local API and frontend bound to localhost. The cloud demo uses a shared passcode, not user accounts, and never exposes physical hardware.
 

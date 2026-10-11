@@ -1,0 +1,6 @@
+# Optional local vision service (backend/app/vision). Install on the laptop with the camera:
+#   pip install -r requirements.txt -r requirements-vision.txt
+# The cloud API does not install these; vision imports them lazily and reports them missing.
+ultralytics>=8.3,<9
+mediapipe>=0.10.21,<2
+opencv-python>=4.10,<6

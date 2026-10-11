@@ -131,3 +131,24 @@ def test_allowed_cors_origins_include_configured_origins_without_wildcard(monkey
         "https://handoff.vercel.app",
         "https://preview.vercel.app",
     ]
+
+
+@pytest.mark.parametrize("writes_flag", [None, "1"])
+def test_cloud_forces_motor_writes_off_so_stop_and_chat_stay_public(monkeypatch, tmp_path, writes_flag):
+    # main defaults local writes on; the hosted API must still treat writes as off for remote visitors.
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "writes.sqlite3")
+    monkeypatch.setenv("HANDOFF_CLOUD", "1")
+    monkeypatch.delenv("HANDOFF_PASSCODE", raising=False)
+    if writes_flag is None:
+        monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    else:
+        monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", writes_flag)
+    with remote_client() as client:
+        assert client.get("/api/hardware/control").json()["writes_enabled"] is False
+        assert client.post("/api/control/stop").status_code == 200
+        assert client.post("/api/control/reset").status_code == 200
+        chat = client.post("/api/assistant/chat", json={"provider": "offline", "message": "peace sign"})
+        assert chat.status_code == 200 and chat.json()["proposal"]
+        assert client.post("/api/macros/does-not-matter/hardware/run").status_code == 403

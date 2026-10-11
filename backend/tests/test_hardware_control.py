@@ -90,8 +90,15 @@ def fake_controller(monkeypatch):
     control.clear_pending()
 
 
-def test_preview_is_read_only_when_writes_disabled(fake_controller, monkeypatch):
+def test_hardware_writes_default_on_with_explicit_opt_out(monkeypatch):
     monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    assert control.writes_enabled() is True
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
+    assert control.writes_enabled() is False
+
+
+def test_preview_is_read_only_when_writes_disabled(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
     preview = control.prepare_jog(1, 10, measured_calibration(), False)
     assert preview["start"] == 1000 and preview["target"] == 1010
     assert preview["can_execute"] is False and "token" not in preview
@@ -109,22 +116,34 @@ def test_physical_macro_preview_accepts_raw_targets_without_calibration_or_write
     assert not any(call[0] in ("move", "queue", "sync_packet", "write") for call in fake_controller)
 
 
-def test_physical_macro_uses_manual_sync_path_and_exact_confirmation(fake_controller, monkeypatch):
+def test_run_macro_sends_in_one_call_and_blocks_when_writes_disabled(fake_controller, monkeypatch):
+    steps = [{"positions": {servo_id: 2000 for servo_id in range(1, 7)}, "duration_ms": 300}]
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
+    with pytest.raises(control.HardwareControlError, match="No motor command was sent"):
+        control.run_macro("Grab", "macro-v1", steps, stopped=False)
+    assert not any(call[0] in ("move", "sync_packet") for call in fake_controller)
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    result = control.run_macro("Grab", "macro-v1", steps, stopped=False)
+    assert result["accepted"] is True
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", tuple((servo_id, 2000, 2400, 50) for servo_id in range(1, 7)))
+    ]
+
+
+def test_physical_macro_runs_on_click_through_manual_sync_path(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
     steps = [{"positions": {servo_id: 1000 + servo_id for servo_id in range(1, 7)}, "duration_ms": 300}]
     preview = control.prepare_macro("Grab", "macro-v1", steps, False)
     assert preview["can_execute"] is True
     assert [move["target"] for move in preview["steps"][0]["moves"]] == [1001, 1002, 1003, 1004, 1005, 1006]
     assert not any(call[0] in ("move", "sync_packet") for call in fake_controller)
-    with pytest.raises(control.HardwareControlError, match="power cutoff"):
-        control.execute_macro(preview["token"], preview["phrase"], "macro-v1",
-                              off_body=True, power_cut_tested=False, cord_path_clear=True,
-                              stopped=False)
+    with pytest.raises(control.HardwareControlError, match="software stop"):
+        control.execute_macro(preview["token"], "macro-v1", stopped=True)
+    with pytest.raises(control.HardwareControlError, match="Macro changed"):
+        control.execute_macro(control.prepare_macro("Grab", "macro-v1", steps, False)["token"], "macro-v2", stopped=False)
     assert not any(call[0] in ("move", "sync_packet") for call in fake_controller)
     preview = control.prepare_macro("Grab", "macro-v1", steps, False)
-    result = control.execute_macro(preview["token"], preview["phrase"], "macro-v1",
-                                   off_body=True, power_cut_tested=True, cord_path_clear=True,
-                                   stopped=False)
+    result = control.execute_macro(preview["token"], "macro-v1", stopped=False)
     assert result["accepted"] is True and len(result["steps_completed"]) == 1
     assert [call for call in fake_controller if call[0] == "sync_packet"] == [
         ("sync_packet", tuple((servo_id, 1000 + servo_id, 2400, 50) for servo_id in range(1, 7)))
@@ -225,7 +244,7 @@ def test_api_rejects_nonlocal_hardware_request(monkeypatch):
 
 
 def test_position_preview_is_read_only_and_respects_write_lock(fake_controller, monkeypatch):
-    monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
     calibration = CalibrationInput(open_count=2048, closed_count=2448, min_count=0,
                                    max_count=4000, direction="increasing", speed=30,
                                    verified=False, jog_limits_verified=True)
