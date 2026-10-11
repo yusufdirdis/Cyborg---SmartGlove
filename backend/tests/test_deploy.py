@@ -57,12 +57,26 @@ def test_websocket_passcode_and_unset_local_behavior(monkeypatch):
             assert socket.receive_json()["mode"] == "simulation"
 
 
-def test_cloud_without_passcode_fails_closed_but_keeps_health_open(monkeypatch):
+def test_cloud_without_passcode_is_public_but_calibration_and_hardware_stay_local(monkeypatch, tmp_path):
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "public.sqlite3")
     monkeypatch.setenv("HANDOFF_CLOUD", "1")
     monkeypatch.delenv("HANDOFF_PASSCODE", raising=False)
     with remote_client() as client:
         assert client.get("/api/health").status_code == 200
-        assert client.get("/api/macros").status_code == 503
+        assert client.get("/api/macros").status_code == 200
+        with client.websocket_connect("/ws/telemetry") as ws:
+            assert "positions" in ws.receive_json()
+        cal = client.get("/api/calibration").json()[0]
+        data = {k: v for k, v in cal.items() if k not in ("servo_id", "name", "revision")}
+        blocked = client.put("/api/calibration/1", json={**data, "verified": True})
+        assert blocked.status_code == 403 and "local site" in blocked.json()["detail"]
+        assert client.get("/api/calibration").json()[0]["verified"] is False
+        hardware = client.post("/api/hardware/live", json={"moves": [{"servo_id": 1, "target": 2000, "speed": 100}]})
+        assert hardware.status_code == 403
+        assert client.post("/api/control/stop").status_code == 200
+        client.post("/api/control/reset")
 
 
 @pytest.mark.parametrize("method,path,body", [

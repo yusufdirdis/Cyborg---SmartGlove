@@ -321,9 +321,7 @@ async def require_demo_passcode(request: Request, call_next):
     path = request.url.path
     if request.method == "OPTIONS" or not path.startswith("/api/") or path == "/api/health":
         return await call_next(request)
-    expected = os.environ.get("HANDOFF_PASSCODE", "")
-    if cloud_mode() and not expected:
-        return JSONResponse(status_code=503, content={"detail": "Demo access is not configured"})
+    expected = os.environ.get("HANDOFF_PASSCODE", "")  # optional: the public demo runs without one
     if not expected:
         return await call_next(request)
     supplied = request.headers.get("X-Handoff-Passcode", "")
@@ -696,6 +694,9 @@ def calibration():
 
 @app.put("/api/calibration/{servo_id}")
 def update_calibration(servo_id: int, payload: CalibrationUpdate):
+    if cloud_mode():
+        # Calibration limits gate the real glove (the local API reads the same rows), so they are only edited next to it.
+        raise HTTPException(403, "Calibration can only be changed from the local site next to the glove.")
     if servo_id not in SERVO_NAMES:
         raise HTTPException(404, "Servo not found")
     data = CalibrationInput.model_validate(payload.model_dump(exclude={"revision"})).model_dump()
@@ -924,7 +925,7 @@ def _provider_settings_read(request: Request) -> None:
 
 
 def _local_or_cloud_live_request(request: Request) -> None:
-    if cloud_mode() and getattr(request.state, "handoff_passcode_authenticated", False):
+    if cloud_mode():  # visitors use their own Gemini key; the passcode middleware (if set) already ran
         return
     _local_settings_request(request)
 
@@ -967,7 +968,7 @@ async def test_provider_settings(name: str, request: Request):
 async def telemetry(ws: WebSocket):
     expected = os.environ.get("HANDOFF_PASSCODE", "")
     supplied = ws.query_params.get("passcode", "")
-    if (cloud_mode() and not expected) or (expected and not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))):
+    if expected and not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
         await ws.close(code=4401)
         return
     await ws.accept()

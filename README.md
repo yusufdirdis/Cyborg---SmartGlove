@@ -128,11 +128,11 @@ The Railway project is described by [`.railway/railway.ts`](.railway/railway.ts)
 | `SUPABASE_DB_URL` | Owner-provided `handoff_app` session-pooler URL; keep it secret. |
 | `HANDOFF_INSTANCE` | `railway` |
 | `HANDOFF_CLOUD` | `1` |
-| `HANDOFF_PASSCODE` | Owner-provided demo passcode, at least 12 characters. |
+| `HANDOFF_PASSCODE` | Optional. Leave unset for a public demo; when set, every API request and the telemetry WebSocket need it. |
 | `HANDOFF_CORS_ORIGINS` | Comma-separated Vercel production origin and any required preview origins. |
 | `HANDOFF_LIVE_POSITIONS` | `0` |
 
-Never set `HANDOFF_ENABLE_HARDWARE_WRITES` on Railway. The cloud API reports hardware unavailable and does not scan serial devices; local-only hardware routes remain guarded. In cloud mode each visitor enters their **own** AI keys on the Settings page. The keys stay in that browser and are sent only with AI requests (`X-Gemini-Key`, `X-OpenRouter-Key`, `X-HF-Token` and the matching `-Model` headers). The server uses them for that one request and never saves or logs them, and it never falls back to a server key. Saving keys on the server returns 403 in cloud mode, and no provider keys are set on Railway. `/api/health` is public for Railway's health check; other API requests require the demo passcode, and the telemetry WebSocket uses the same passcode.
+Never set `HANDOFF_ENABLE_HARDWARE_WRITES` on Railway. The cloud API reports hardware unavailable and does not scan serial devices; local-only hardware routes remain guarded. In cloud mode each visitor enters their **own** AI keys on the Settings page. The keys stay in that browser and are sent only with AI requests (`X-Gemini-Key`, `X-OpenRouter-Key`, `X-HF-Token` and the matching `-Model` headers). The server uses them for that one request and never saves or logs them, and it never falls back to a server key. Saving keys on the server returns 403 in cloud mode, and no provider keys are set on Railway. `/api/health` is always public for Railway's health check. Without `HANDOFF_PASSCODE` the demo is public: anyone can use the simulation, edit macros and use the AI with their own key. Calibration edits return 403 in cloud mode, because the calibration rows also gate the real glove through the local API.
 
 ### Vercel frontend
 
@@ -142,7 +142,7 @@ Set the Vercel project root directory to `frontend/`, the framework to Vite if i
 |---|---|
 | `VITE_API_URL` | Railway API origin, with no trailing slash. |
 
-Deploy Railway first to get its API origin, then deploy Vercel. After Vercel assigns the production URL, add that origin to Railway's `HANDOFF_CORS_ORIGINS` and redeploy the API. The demo passcode is a shared access gate, not user authentication. Cloud simulation has no USB or physical glove access; physical controls must be run through the owner's local API. The Railway service is always on and may incur hosting charges.
+Deploy Railway first to get its API origin, then deploy Vercel. After Vercel assigns the production URL, add that origin to Railway's `HANDOFF_CORS_ORIGINS` and redeploy the API. The optional demo passcode is a shared access gate, not user authentication. Cloud simulation has no USB or physical glove access; physical controls must be run through the owner's local API. The Railway service is always on and may incur hosting charges.
 
 ## Checks
 
