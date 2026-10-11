@@ -33,6 +33,11 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
 
 - **`backend/app/main.py`** holds the whole API: the Pydantic models (`Pose`, `Step`, `MacroInput`, `CalibrationInput`), the SQLite helpers, the `SimulationAdapter`, and all routes.
   - The SQLite DB path comes from the `HANDOS_DB` env var. The default is `backend/handos.sqlite3`, which is gitignored. `init_db()` runs in the lifespan hook and seeds five sample poses plus six unverified calibration rows.
+  - Persistence goes through `backend/app/store.py`: `SQLiteStore` by default, or `PostgresStore` when `SUPABASE_DB_URL` is set. The Postgres store uses the `handoff` schema in the shared Resume Fit Supabase project (`backend/supabase/handoff_schema.sql`, applied by hand, never `supabase db push`) and connects as `handoff_app`.
+  - There is no silent fallback: a DB outage raises `StoreUnavailable`, which returns 503. Stop and reset never depend on the store.
+  - Macro and calibration `PUT` take an optional `revision`; a mismatch returns 409.
+  - Audit logs (`record()`, `record_move()`, `record_proposal()` in `main.py`) are best-effort, written after the action, and never read back to drive motion.
+  - `tests/test_store.py` covers these rules. Its real-Postgres test runs only with `HANDOFF_TEST_PG_URL`.
   - Macros store `steps` as a JSON text column. Calibration stores each servo's `CalibrationInput` as a JSON blob.
 - **`SimulationAdapter`** is a module-level singleton named `sim`.
   - It interpolates positions in 50 ms ticks and broadcasts a full `snapshot()` to every WebSocket listener on each tick.

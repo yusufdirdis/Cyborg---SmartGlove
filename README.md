@@ -44,6 +44,18 @@ Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>.
 
 On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 3 JSON file with raw 0–4000 counts; older version 1 and 2 exports are converted when imported. Existing saved percentages are migrated to counts once. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
 
+### Supabase (optional)
+
+Macros, calibration and audit logs can live in Supabase instead of SQLite. They use a separate `handoff` schema inside the shared Resume Fit project, so that project's own tables are not touched.
+
+1. Apply [`backend/supabase/handoff_schema.sql`](backend/supabase/handoff_schema.sql) once in the Supabase SQL editor, then run `alter role handoff_app with password '…'`.
+2. Set `SUPABASE_DB_URL` in `backend/.env` to the **session pooler** URL for user `handoff_app.<project-ref>`. The template is in `backend/.env.example`.
+3. From `backend/`, run `python -m app.migrate_to_supabase` to copy your SQLite macros and calibration, then start the API.
+
+The audit logs record device sessions, E-stop confirmations, physical moves, AI proposals and vision detections. They are written after each action, never trigger motion, and a logging failure never blocks a response.
+
+With `SUPABASE_DB_URL` set there is no SQLite fallback. If the database is unreachable or the project is paused, macro and calibration routes return 503, while Stop and Reset still work. Remove the variable to go back to SQLite.
+
 ## Try the first milestone
 
 1. Open **Macro Studio** and choose **New macro**.

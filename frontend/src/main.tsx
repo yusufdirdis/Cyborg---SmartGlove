@@ -10,9 +10,9 @@ import './index.css'
 
 type Page = 'Dashboard'|'Manual Control'|'Macro Studio'|'AI Vision'|'AI Assistant'|'Devices'|'Settings'
 type Step = {positions: Record<number,number>,duration_ms:number}
-type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[]}
+type Macro = {id:string,name:string,description:string,kind:'pose'|'sequence',steps:Step[],revision?:number}
 type HardwareMacroPreview = {can_execute:boolean,steps:{step:number,duration_ms:number,moves:{servo_id:number,target:number,speed:number}[]}[],blocked_reason?:string|null,token?:string,phrase?:string,message?:string,expires_in_seconds?:number}
-type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean}
+type Calibration = {servo_id:number,name:string,open_count:number,closed_count:number,min_count:number,max_count:number,direction:'increasing'|'decreasing',speed:number,verified:boolean,jog_limits_verified:boolean,revision?:number}
 type Physical = {connected:boolean,positions:Record<number,number|null>,read_at:number|null,error:string|null}
 type Status = {mode:string,positions:Record<number,number>,target:Record<number,number>,stopped:boolean,playing:boolean,last_event:string,vision:{label:string,confidence:number,source:string}|null,physical:Physical,devices:Record<string,string>}
 type HardwareStatus = {connected:boolean,port:string|null,servos:{id:number,model:number,position:number|null,voltage_v:number|null,temperature_c:number|null,moving:boolean|null,mode:number|null,torque_enabled:boolean|null}[],error:string|null,checked_at:number}
@@ -436,7 +436,7 @@ function Manual({status,hardware,onReading}:{status:Status,hardware:HardwareStat
  return <HardwareManual status={status} hardware={hardware} onReading={onReading}/>
 }
 function MacroStudio({macros,status,refresh,action,play,manual}:{macros:Macro[],status:Status,refresh:()=>Promise<void>,action:<T>(work:()=>Promise<T>,success?:string)=>Promise<T|undefined>,play:(m:Macro)=>void,manual:Record<number,number>}){const [selected,setSelected]=useState<string|null>(null),[draft,setDraft]=useState<Omit<Macro,'id'>>({name:'',description:'',kind:'pose',steps:[{positions:blank(),duration_ms:700}]}),[editing,setEditing]=useState(false),[hardwareTest,setHardwareTest]=useState<Macro|null>(null),[hardwarePreview,setHardwarePreview]=useState<HardwareMacroPreview|null>(null),[hardwarePhrase,setHardwarePhrase]=useState(''),[hardwareChecks,setHardwareChecks]=useState({off_body:false,power_cut_tested:false,cord_path_clear:false}),file=useRef<HTMLInputElement>(null)
- const edit=(m:Macro)=>{setSelected(m.id);setDraft({name:m.name,description:m.description,kind:m.kind,steps:structuredClone(m.steps)});setEditing(true)}
+ const edit=(m:Macro)=>{setSelected(m.id);setDraft({name:m.name,description:m.description,kind:m.kind,steps:structuredClone(m.steps),revision:m.revision});setEditing(true)}
  const fresh=()=>{setSelected(null);setDraft({name:'New gesture',description:'',kind:'pose',steps:[{positions:{...manual},duration_ms:700}]});setEditing(true)}
  const save=async()=>{if(!draft.name.trim())return;const path=selected?`/macros/${selected}`:'/macros';const result=await action(()=>api<Macro>(path,{method:selected?'PUT':'POST',body:json(draft)}),selected?'Macro updated':'Macro created');if(result){await refresh();setEditing(false);setSelected(null)}}
  const remove=async(m:Macro)=>{if(!window.confirm(`Delete “${m.name}”?`))return;await action(()=>api(`/macros/${m.id}`,{method:'DELETE'}),'Macro deleted');await refresh()}
@@ -466,7 +466,7 @@ function SaveAsMacro({steps,defaultName,macros}:{steps:Step[],defaultName:string
   if(existing&&existing.steps.length+timed.length>30){setError(`${existing.name} would have more than 30 steps.`);return}
   setState('saving')
   try{
-   if(existing)await api(`/macros/${existing.id}`,{method:'PUT',body:json({name:existing.name,description:existing.description,kind:'sequence',steps:[...existing.steps,...timed]})})
+   if(existing)await api(`/macros/${existing.id}`,{method:'PUT',body:json({name:existing.name,description:existing.description,kind:'sequence',steps:[...existing.steps,...timed],revision:existing.revision})})
    else await api('/macros',{method:'POST',body:json({name:name.trim(),description:'Saved from AI assistant',kind:timed.length===1?'pose':'sequence',steps:timed})})
    setState('saved');macrosChanged()
   }catch(e){setState('idle');setError(e instanceof Error?e.message:String(e))}

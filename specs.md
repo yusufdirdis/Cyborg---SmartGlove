@@ -1,6 +1,6 @@
 # handoff — System Specification
 
-Specification for the **handoff** (repository name: Cyborg---SmartGlove) simulation-first control studio, the roadmap for the physical glove integration, and the persistence migration to the existing Resume Fit Supabase project.
+Specification for the **handoff** (repository name: Cyborg---SmartGlove) simulation-first control studio, the roadmap for the physical glove integration, and the persistence in the shared Resume Fit Supabase project.
 
 Companion documents:
 
@@ -49,7 +49,7 @@ Stack:
 | Frontend | React 19 + TypeScript + Tailwind CSS 3 + Vite 6, single file `frontend/src/main.tsx` | Implemented |
 | Backend | FastAPI + Pydantic v2, Python 3.11+, served by Uvicorn | Implemented |
 | Persistence | SQLite via the `sqlite3` standard library | Implemented |
-| Persistence (target) | One new table in the existing Resume Fit Supabase (Postgres) project | Proposed |
+| Persistence (optional) | `handoff` schema in the shared Resume Fit Supabase (Postgres) project, enabled by `SUPABASE_DB_URL` | Implemented; schema applied separately |
 | Telemetry | WebSocket `/ws/telemetry`, full-snapshot broadcasts | Implemented |
 | Hardware path | Read-only status for IDs 1–6; no physical movement path | Movement remains gated |
 
@@ -320,82 +320,60 @@ Example export file (also a valid import):
 
 Schema caveat: the schema's `maxItems: 100` matches the **import** constraint. Export is not capped, so the schema is the contract for a file that can be imported; an export containing more than 100 macros is valid output but not valid input until the cap asymmetry is resolved.
 
-### 3.4 Proposed Supabase persistence
+### 3.4 Supabase persistence (`handoff` schema in the Resume Fit project)
 
-Use the existing **Resume Fit** Supabase project. Add exactly **one new table** for all saved SmartGlove records rather than a table per record type.
+The Supabase free plan allows two projects, so handoff shares the existing **Resume Fit** project. Everything lives in a dedicated **`handoff` Postgres schema**. Resume Fit's `public` schema, auth configuration and policies are not altered.
 
-#### Table: `public.cyborg_records`
+The schema is defined in [`backend/supabase/handoff_schema.sql`](backend/supabase/handoff_schema.sql), an idempotent file applied once by an admin. The code is in [`backend/app/store.py`](backend/app/store.py). **SQLite remains the default.** Setting `SUPABASE_DB_URL` switches the API to Supabase.
 
-| Column | Type | Purpose |
-|---|---|---|
-| `id` | `uuid` | Primary key |
-| `record_type` | `text` | `macro`, `calibration`, or `device_session` |
-| `record_key` | `text` | Stable key within the type |
-| `data` | `jsonb` | Validated JSON object |
-| `revision` | `integer` | Positive version counter for concurrent-edit checks |
-| `created_at` | `timestamptz` | Creation time |
-| `updated_at` | `timestamptz` | Last update time |
+| Table | Contents |
+|---|---|
+| `handoff.macros` | One row per macro. The `id` uuid is kept from SQLite. Columns: `name`, `description`, `kind` (`pose`/`sequence`), `steps` jsonb (1–30; exactly 1 for a pose), `revision`, timestamps. |
+| `handoff.calibration` | One row per servo 1–6. `data` jsonb holds the `CalibrationInput` object verbatim, plus `revision`. |
+| `handoff.device_sessions` | One row per API process the first time IDs 1–6 answer a status scan. Columns: port, pid, the first readings. |
+| `handoff.estop_checks` | The off-body / power-cut-tested / cord-path-clear confirmations sent with each guarded execute. |
+| `handoff.hardware_moves` | Audit row for every physical execute (`jog`, `position`, `group`, `live`, `torque_enable`): servo IDs, request, ok/result/error. |
+| `handoff.ai_proposals` | Every chat or Live proposal and its outcome (`proposed` → `confirmed`/`saved`/`cancelled`/`expired`). |
+| `handoff.vision_detections` | Recorded `POST /api/vision/detection` events. |
 
-Proposed DDL (documentation only — **not applied**; see §3.5 prerequisites):
-
-```sql
-create table public.cyborg_records (
-  id          uuid primary key default gen_random_uuid(),
-  record_type text not null check (record_type in ('macro', 'calibration', 'device_session')),
-  record_key text not null,
-  data        jsonb not null,
-  revision    integer not null default 1 check (revision > 0),
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now(),
-  unique (record_type, record_key)
-);
-
-alter table public.cyborg_records enable row level security;
-```
+Each log table and `device_sessions` has an `instance` column (`HANDOFF_INSTANCE`, default `local`). This is because the local API with the USB glove and a hosted API (planned: Railway) share the same tables.
 
 Rules:
 
-- **Enforce** the allowed `record_type` values and the `(record_type, record_key)` uniqueness constraint in Postgres, not only in application code.
-- **Each macro is its own record.** `record_key` is the macro UUID (the same UUID currently used as the SQLite `macros.id`). `data` holds the `MacroInput` shape (`name`, `description`, `kind`, `steps`).
-- **Calibration uses channel keys `"1"`–`"6"`** as `record_key`, one record per channel, `data` holding the `CalibrationInput` object.
-- **Device sessions use session UUIDs** as `record_key`, `data` holding the session payload.
-- **Typed payloads [Proposed]** for future evidence (validated by Pydantic before write, never free-form):
-  - calibration evidence: measurement method, raw measurements, timestamps, operator identity, unloaded/off-body conditions, tooling;
-  - resting positions: the measured rest pose per channel;
-  - device identity: controller model/firmware, glove serial, wiring revision;
-  - E-stop verification: who tested it, when, that it interrupts servo power independently of software;
-  - consumed approvals: approval ID, action hash, device session ID, calibration revision, single-use marker.
-- **RLS**: enable row level security and **deny browser-role access** (no permissive policies for `anon`/`authenticated`). All access goes through the FastAPI backend using server-side credentials (service key), never from the browser. Follow Supabase's secure-data guidance (consulted: `https://supabase.com/docs/guides/database/secure-data`, `https://supabase.com/docs/guides/database/postgres/row-level-security`).
-- **Preserve Resume Fit**: do not alter its existing tables, authentication configuration, or policies. The new table is additive.
-- **Credentials stay server-side** in FastAPI environment configuration. Never ship Supabase keys to the frontend.
-- **Keep simulation state and live telemetry in FastAPI.** Do not replace motor telemetry with Supabase Realtime, and do not persist per-tick simulation state.
+- **Access control.**
+  - RLS is enabled on every table.
+  - `public`, `anon` and `authenticated` have no grants and no policies.
+  - The schema is not exposed through the Data API.
+  - The backend connects as the least-privilege login `handoff_app`. It has usage on `handoff`, DML on its tables, and one role-scoped policy per table. It has no DDL rights and no access to `public` or `auth`.
+  - The browser and the Vercel frontend never receive database credentials.
+- **Connection.** psycopg 3 over the Supavisor session pooler (IPv4), `sslmode=require`, with a pool of at most 5 connections.
+- **No silent fallback.**
+  - With `SUPABASE_DB_URL` set, an unreachable database makes macro and calibration routes return **503**, and nothing is written to SQLite.
+  - The software stop and reset stay in FastAPI memory and keep working.
+  - The API also refuses to start if the `handoff` schema is missing.
+- **Concurrency.** Macro and calibration `PUT` accept the `revision` the client loaded. A mismatch returns **409**, and the client reloads. Omitting `revision` means last write wins, which is the behaviour of older clients.
+- **Logs are best-effort audit records.**
+  - They are written after the action, on a background thread when using Postgres.
+  - A logging failure is printed and never changes or delays a stop, a hardware result, or a proposal response.
+  - Logs are never read back to trigger motion. Vision detections still only record.
+- **Keep simulation state and live telemetry in FastAPI.** Do not use Supabase Realtime for motor telemetry, and do not persist per-tick state.
 
-#### Concurrency model [Proposed]
+#### SQLite → Supabase migration
 
-- Updates read `revision`, then write with `where id = :id and revision = :expected`, incrementing `revision`.
-- A zero-row update means a conflicting edit: return 409 to the client; the client re-fetches and re-applies.
-- Deletes are plain deletes; no soft-delete column is planned unless required later.
+Run `python -m app.migrate_to_supabase [--overwrite]` from `backend/` with `SUPABASE_DB_URL` set.
 
-#### SQLite → Supabase migration [Proposed, repeatable]
+- It copies macros (keeping UUIDs and timestamps) and calibration (verbatim JSON, including `verified: false`).
+- It refuses ids that already exist with different content unless `--overwrite` is passed, verifies each row afterwards, and changes nothing on a re-run.
+- Run it **before** the first API start against Supabase. Otherwise startup seeds placeholder calibration, and the migration then needs `--overwrite`.
 
-1. Read every row from SQLite `macros` and `calibration`.
-2. Upsert each macro as `('macro', id, data, revision = 1, created_at, updated_at)`; **preserve the existing macro UUIDs** (they are already uuid4 strings) and the epoch timestamps converted to `timestamptz`.
-3. Upsert each calibration row as `('calibration', servo_id::text, data, …)`; **preserve the JSON values verbatim**, including `verified: false`.
-4. Optionally create one initial `device_session` record documenting the migration (operator, timestamp, source DB path hash).
-5. Verify: row counts per type, per-macro JSON equality (normalized key order), and calibration equality.
-6. The script is idempotent (safe to re-run) and refuses to run when the target already contains records of the same keys unless an explicit `--overwrite` flag is given.
-7. **No silent fallback to SQLite after switching.** Once `SUPABASE_URL`/credentials are configured, a database outage must surface as an error, and:
-   - persistence-dependent actions (macro CRUD, calibration writes, session records) are **rejected**, not silently written elsewhere;
-   - the **software stop remains locally available** because stop state lives in FastAPI memory;
-   - reads may serve cached/last-known data only if the UI clearly labels it as stale.
+### 3.5 Supabase setup steps
 
-### 3.5 Supabase prerequisites (open items)
-
-These do not block drafting but block implementation:
-
-- The Supabase CLI exists at `C:\Users\paulr\scoop\apps\supabase\current\supabase.exe` but was not on the PATH during investigation; direct execution worked, and project listing failed because no access token was configured.
-- The exact Resume Fit project reference and its existing schema have **not** been verified.
-- Before applying anything: authenticate the CLI, inspect the Resume Fit schema and policies, capture a migration plan that adds only `public.cyborg_records`, and confirm RLS denies browser roles.
+1. Find the Resume Fit project ref, and confirm it has no `handoff` schema yet.
+2. Apply `backend/supabase/handoff_schema.sql` in the SQL editor, or with the Supabase MCP `apply_migration`. **Do not use `supabase db push`**, which would compare against Resume Fit's own migration history.
+3. Set the backend role's password: `alter role handoff_app with password '…'`.
+4. Put the session-pooler URL in `backend/.env` (or Railway variables) as `SUPABASE_DB_URL`. The user is `handoff_app.<project-ref>`, and the template is in `backend/.env.example`.
+5. Run the migration, then start the API.
+6. Free projects pause after about a week without activity. Unpause the project before a demo.
 
 ---
 
@@ -707,7 +685,7 @@ c
 ### Phase 2 — Persistence migration and simulation hardening [Proposed]
 
 1. Verify Supabase prerequisites (§3.5): CLI auth, Resume Fit project reference, existing schema and policies.
-2. Apply `public.cyborg_records` (§3.4) with RLS denying browser roles; keep Resume Fit untouched.
+2. Apply `backend/supabase/handoff_schema.sql` (§3.4) to the `handoff` schema with RLS denying browser roles; keep Resume Fit untouched.
 3. Write and test the repeatable SQLite→Supabase migration preserving macro UUIDs, timestamps, and calibration values.
 4. Add revision-based optimistic concurrency; 409 on conflicting edits.
 5. No silent fallback: database outages reject persistence actions; software stop stays local.
@@ -803,7 +781,7 @@ Persistence and migration:
 - SQLite→Supabase migration preserves macro UUIDs, timestamps, and calibration values exactly; re-running is idempotent.
 - Revision-conflict write returns 409 and does not corrupt the record.
 - Database outage: macro/calibration writes fail loudly; software stop still latches and resets; no silent fallback writes.
-- RLS verification: browser roles cannot read or write `cyborg_records`.
+- RLS verification: browser roles cannot read or write any `handoff.*` table.
 
 Telemetry and simulation:
 
