@@ -51,7 +51,8 @@ class Step(BaseModel):
 
     @model_validator(mode="after")
     def valid_pose(self):
-        Pose(positions=self.positions)
+        if set(self.positions) != set(SERVO_NAMES) or any(not 0 <= value <= MAX_SERVO_COUNT for value in self.positions.values()):
+            raise ValueError("A macro step needs six raw servo targets from 0 to 4000")
         return self
 
 
@@ -90,7 +91,7 @@ class CalibrationInput(BaseModel):
 
 
 class ImportPayload(BaseModel):
-    version: Literal[1, 2]
+    version: Literal[1, 2, 3]
     macros: list[MacroInput] = Field(max_length=100)
 
 
@@ -105,13 +106,22 @@ def init_db():
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS calibration (servo_id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
-        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
             for row in list(conn.execute("SELECT id, steps FROM macros")):
                 steps = json.loads(row["steps"])
                 for step in steps:
                     step["positions"] = remap_legacy_positions(step["positions"])
                 conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(steps), row["id"]))
             conn.execute("PRAGMA user_version = 1")
+            version = 1
+        if version < 2:
+            for row in list(conn.execute("SELECT id, steps FROM macros")):
+                steps = json.loads(row["steps"])
+                for step in steps:
+                    step["positions"] = {str(sid): int(value) * 40 for sid, value in step["positions"].items()}
+                conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(steps), row["id"]))
+            conn.execute("PRAGMA user_version = 2")
         if conn.execute("SELECT COUNT(*) FROM macros").fetchone()[0] == 0:
             samples = [
                 ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
@@ -121,7 +131,7 @@ def init_db():
                 ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
             ]
             for name, description, values in samples:
-                save_macro(conn, MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, values)), duration_ms=700)]))
+                save_macro(conn, MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, [v * 40 for v in values])), duration_ms=700)]))
         for sid in SERVO_NAMES:
             conn.execute("INSERT OR IGNORE INTO calibration VALUES (?,?)", (sid, json.dumps({"open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": False, "jog_limits_verified": False})))
 
@@ -296,6 +306,11 @@ class LiveMoveInput(BaseModel):
 
 class TorqueEnableInput(BaseModel):
     servo_ids: list[int] = Field(min_length=1, max_length=6)
+
+
+def _macro_fingerprint(row) -> str:
+    return json.dumps({"id": row["id"], "name": row["name"], "kind": row["kind"],
+                       "steps": json.loads(row["steps"])}, sort_keys=True, separators=(",", ":"))
 
 
 def _local_hardware_request(request: Request) -> None:
@@ -505,7 +520,7 @@ def delete_macro(macro_id: str):
 
 @app.get("/api/macros/export")
 def export_macros():
-    return {"version": 2, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
+    return {"version": 3, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
 
 
 @app.post("/api/macros/import")
@@ -516,6 +531,9 @@ def import_macros(payload: ImportPayload):
             if payload.version == 1:
                 for step in data["steps"]:
                     step["positions"] = remap_legacy_positions(step["positions"])
+            if payload.version in (1, 2):
+                for step in data["steps"]:
+                    step["positions"] = {str(sid): int(value) * 40 for sid, value in step["positions"].items()}
             save_macro(conn, MacroInput.model_validate(data))
     return {"imported": len(payload.macros)}
 
@@ -531,8 +549,47 @@ async def play_macro(macro_id: str):
     if sim.task and not sim.task.done():
         sim.task.cancel()
     steps = [Step.model_validate(s) for s in json.loads(row["steps"])]
-    sim.task = asyncio.create_task(sim.play(steps))
+    simulated = [Step(positions={sid: round(count * 100 / MAX_SERVO_COUNT)
+                                 for sid, count in step.positions.items()},
+                      duration_ms=step.duration_ms) for step in steps]
+    sim.task = asyncio.create_task(sim.play(simulated))
     return {"accepted": True, "mode": "simulation"}
+
+
+@app.post("/api/macros/{macro_id}/hardware/preview")
+def preview_hardware_macro(macro_id: str, request: Request):
+    from .hardware_control import HardwareControlError, prepare_macro
+
+    _local_hardware_request(request)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM macros WHERE id=?", (macro_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Macro not found")
+    steps = [Step.model_validate(item).model_dump() for item in json.loads(row["steps"])]
+    try:
+        return prepare_macro(row["name"], _macro_fingerprint(row), steps, sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/macros/{macro_id}/hardware/execute")
+def execute_hardware_macro(macro_id: str, payload: JogConfirmInput, request: Request):
+    from .hardware_control import HardwareControlError, execute_macro
+
+    _local_hardware_request(request)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM macros WHERE id=?", (macro_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Macro not found")
+    try:
+        return execute_macro(payload.token, payload.phrase, _macro_fingerprint(row),
+                             off_body=payload.off_body,
+                             power_cut_tested=payload.power_cut_tested,
+                             cord_path_clear=payload.cord_path_clear,
+                             stopped=sim.stopped,
+                             is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/control/pose")

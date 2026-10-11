@@ -1,7 +1,7 @@
-"""Confirmed single-servo position control using the existing Feetech driver.
+"""Physical servo position control using the existing Feetech driver.
 
-This is intentionally separate from simulation and macro playback. Hardware
-writes are disabled unless explicitly enabled when starting the local API.
+Live edits and macro steps use the same synchronized transport and health
+checks. Hardware writes are disabled unless enabled when starting the local API.
 """
 
 from __future__ import annotations
@@ -142,12 +142,24 @@ class PendingGroup:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class PendingMacro:
+    token: str
+    macro_fingerprint: str
+    steps: tuple[tuple[tuple[int, int, int], ...], ...]  # id, raw count, speed
+    starts: tuple[tuple[int, int], ...]
+    phrase: str
+    expires_at: float
+
+
 _pending: PendingJog | None = None
 _pending_lock = threading.Lock()
 _position_pending: PendingPosition | None = None
 _position_pending_lock = threading.Lock()
 _group_pending: PendingGroup | None = None
 _group_pending_lock = threading.Lock()
+_macro_pending: PendingMacro | None = None
+_macro_pending_lock = threading.Lock()
 POSITION_SPEED_MIN = 50
 POSITION_SPEED_MAX = 2400
 POSITION_SPEED_DEFAULT = 2400
@@ -163,13 +175,126 @@ def writes_enabled() -> bool:
 
 
 def clear_pending() -> None:
-    global _pending, _position_pending, _group_pending
+    global _pending, _position_pending, _group_pending, _macro_pending
     with _pending_lock:
         _pending = None
     with _position_pending_lock:
         _position_pending = None
     with _group_pending_lock:
         _group_pending = None
+    with _macro_pending_lock:
+        _macro_pending = None
+
+
+def prepare_macro(name: str, macro_fingerprint: str, steps: list[dict], stopped: bool) -> dict:
+    """Preview raw macro targets using the same count and health checks as live manual control."""
+    global _macro_pending
+    with _macro_pending_lock:
+        _macro_pending = None
+    if not 1 <= len(steps) <= 30:
+        raise HardwareControlError("A hardware macro must contain 1–30 steps.")
+    blocked: list[str] = []
+    try:
+        with _driver(lock_timeout=2.0) as driver:
+            _check_bus_still(driver)
+            snapshots = {servo_id: read_snapshot(driver, servo_id) for servo_id in range(1, 7)}
+        for servo_id, snapshot in snapshots.items():
+            _validate_live_snapshot(snapshot, servo_id)
+    except (BenchJogError, HardwareControlError) as exc:
+        blocked.append(str(exc))
+        snapshots = locals().get("snapshots", {})
+
+    preview_steps = []
+    command_steps = []
+    for index, step in enumerate(steps, start=1):
+        targets = step.get("positions", {})
+        mapped: dict[int, int] = {}
+        for servo_id in range(1, 7):
+            count = targets.get(servo_id, targets.get(str(servo_id)))
+            if not isinstance(count, int) or not 0 <= count <= 4000:
+                blocked.append(f"Step {index}: invalid raw target for Servo {servo_id}; use 0–4000 counts.")
+                continue
+            mapped[servo_id] = count
+        speed_moves = []
+        for servo_id, count in mapped.items():
+            speed_moves.append((servo_id, count, POSITION_SPEED_DEFAULT))
+        command_steps.append(tuple(speed_moves))
+        preview_steps.append({"step": index, "duration_ms": step.get("duration_ms"),
+                              "moves": [{"servo_id": sid, "target": count, "speed": speed}
+                                        for sid, count, speed in speed_moves]})
+
+    if stopped:
+        blocked.append("Software stop is latched.")
+    if not writes_enabled():
+        blocked.append("Motor movement is locked. Start the local API with hardware writes enabled.")
+    if blocked:
+        return {"can_execute": False, "steps": preview_steps, "blocked_reason": " ".join(dict.fromkeys(blocked))}
+
+    starts = tuple((sid, snapshots[sid].position) for sid in range(1, 7))
+    phrase = f"RUN MACRO {name} ON GLOVE"
+    pending = PendingMacro(str(uuid4()), macro_fingerprint, tuple(command_steps), starts, phrase,
+                           time.monotonic() + 30)
+    with _macro_pending_lock:
+        _macro_pending = pending
+    return {"can_execute": True, "steps": preview_steps, "token": pending.token,
+            "phrase": phrase, "expires_in_seconds": 30,
+            "message": "Each step sends all six raw targets together at the Manual Control default speed. Step duration is simulation timing only."}
+
+
+def execute_macro(token: str, phrase: str, macro_fingerprint: str, *, off_body: bool,
+                  power_cut_tested: bool, cord_path_clear: bool,
+                  stopped: bool, is_stopped: Callable[[], bool] | None = None) -> dict:
+    global _macro_pending
+    with _macro_pending_lock:
+        pending = _macro_pending
+        _macro_pending = None
+    if not pending or pending.token != token or time.monotonic() > pending.expires_at:
+        raise HardwareControlError("Macro preview expired. Review the hardware move again.")
+    if not writes_enabled() or stopped:
+        raise HardwareControlError("Physical movement is disabled or software stop is latched.")
+    if not (off_body and power_cut_tested and cord_path_clear):
+        raise HardwareControlError("Confirm the glove is off-body, the power cutoff was tested, and the cord path is clear.")
+    if phrase.strip() != pending.phrase:
+        raise HardwareControlError("Confirmation text did not match. No command was sent.")
+    if macro_fingerprint != pending.macro_fingerprint:
+        raise HardwareControlError("Macro changed after preview. Review it again.")
+    if is_stopped and is_stopped():
+        raise HardwareControlError("Software stop was pressed before the macro. No move was sent.")
+
+    completed = []
+    try:
+        # Keep the shared serial bus reserved across the entire macro so a
+        # status scan or another control request cannot interleave steps.
+        with _driver(lock_timeout=2.0) as driver:
+            _check_bus_still(driver)
+            for servo_id, start in pending.starts:
+                current = read_snapshot(driver, servo_id)
+                _validate_live_snapshot(current, servo_id)
+                if abs(current.position - start) > 10:
+                    raise HardwareControlError(f"Servo {servo_id} changed position since preview. No macro command was sent.")
+            transport = FeetechServoTransport(driver)
+            for index, moves in enumerate(pending.steps, start=1):
+                if is_stopped and is_stopped():
+                    raise HardwareControlError(f"Software Stop was pressed before step {index}; remaining steps were not sent.")
+                if not writes_enabled():
+                    raise HardwareControlError("Physical movement was disabled; remaining macro steps were not sent.")
+                # Reuse Manual Control's live health checks and synchronized
+                # transport for every all-servo raw-count step.
+                _check_bus_still(driver)
+                for servo_id, _target, _speed in moves:
+                    current = read_snapshot(driver, servo_id)
+                    _validate_live_snapshot(current, servo_id)
+                if is_stopped and is_stopped():
+                    raise HardwareControlError(f"Software Stop was pressed before step {index}; remaining steps were not sent.")
+                transport.write_positions_together(list(moves))
+                final_positions = transport.wait_for_targets(
+                    {servo_id: target for servo_id, target, _speed in moves}, is_stopped
+                )
+                completed.append({"step": index, "final_positions": final_positions})
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    return {"accepted": True, "steps_completed": completed,
+            "message": "Macro completed on the glove."}
 
 
 def pending_servo_id(token: str) -> int | None:
@@ -195,7 +320,7 @@ def pending_group_servo_ids(token: str) -> list[int] | None:
 
 def _check_calibration(calibration, start: int, target: int) -> None:
     if not calibration.jog_limits_verified:
-        raise HardwareControlError("Confirm this servo's measured direct-test limits in Calibration first.")
+        raise HardwareControlError("Measured direct-test limits are missing for this servo; physical movement is blocked.")
     if not (calibration.min_count <= start <= calibration.max_count and calibration.min_count <= target <= calibration.max_count):
         raise HardwareControlError("The current position or proposed target is outside this servo's measured limits.")
 
@@ -485,14 +610,7 @@ def move_live(moves: list[tuple[int, int, int]], stopped: bool,
                 snapshot = read_snapshot(driver, servo_id)
                 # A live edit can arrive while the last goal is in progress, so
                 # the stored goal and moving flag are intentionally not a block.
-                if snapshot.model != 777 or snapshot.mode != 0 or snapshot.torque_enabled != 1:
-                    raise HardwareControlError(f"Servo {servo_id} is unavailable for position control.")
-                if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
-                    raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
-                if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
-                    raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
-                if snapshot.position is None:
-                    raise HardwareControlError(f"Servo {servo_id} position is unavailable.")
+                _validate_live_snapshot(snapshot, servo_id)
             if is_stopped and is_stopped():
                 raise HardwareControlError("Software stop was pressed. No move was sent.")
             transport = FeetechServoTransport(driver)
@@ -514,6 +632,18 @@ def move_live(moves: list[tuple[int, int, int]], stopped: bool,
         for servo_id, target, speed in moves
     ], "final_positions": final_positions,
         "message": "Synchronized targets settled." if len(moves) > 1 else "Position target settled."}
+
+
+def _validate_live_snapshot(snapshot, servo_id: int) -> None:
+    """Shared health checks for Manual Control and physical macro steps."""
+    if snapshot.model != 777 or snapshot.mode != 0 or snapshot.torque_enabled != 1:
+        raise HardwareControlError(f"Servo {servo_id} is unavailable for position control.")
+    if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
+        raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
+    if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
+        raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
+    if snapshot.position is None or not 0 <= snapshot.position <= 4000:
+        raise HardwareControlError(f"Servo {servo_id} position is unavailable or outside 0–4000 counts.")
 
 
 def enable_torque(servo_ids: list[int], stopped: bool) -> dict:

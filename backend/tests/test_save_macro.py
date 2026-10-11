@@ -130,7 +130,7 @@ def test_append_converts_pose_to_sequence_and_keeps_name(fake):
 @pytest.mark.parametrize("payload,reason", [
     ({"name": "Too many", "steps": [step(10)] * 31}, "1 to 30"),
     ({"name": "Bad duration", "steps": [step(10, 50)]}, "100 to 10000"),
-    ({"name": "Bad position", "steps": [{"positions": [0, 0, 0, 0, 0, 101], "duration_ms": 500}]}, "0 to 100"),
+    ({"name": "Bad position", "steps": [{"positions": [0, 0, 0, 0, 0, 4001], "duration_ms": 500}]}, "0 to 4000"),
     ({"steps": [step(10)]}, "needs a name"),
     ({"name": "No target", "steps": [step(10)], "append_to_macro_id": "not-a-macro"}, "couldn't find"),
 ], ids=["too-many-steps", "bad-duration", "bad-position", "missing-name", "unknown-target"])

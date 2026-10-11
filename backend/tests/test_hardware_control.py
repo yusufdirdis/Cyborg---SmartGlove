@@ -98,6 +98,39 @@ def test_preview_is_read_only_when_writes_disabled(fake_controller, monkeypatch)
     assert not any(call[0] in ("move", "write") for call in fake_controller)
 
 
+def test_physical_macro_preview_accepts_raw_targets_without_calibration_or_writes(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    steps = [{"positions": {servo_id: 4000 for servo_id in range(1, 7)}, "duration_ms": 300}]
+    preview = control.prepare_macro("Grab", "macro-v1", steps, False)
+    assert preview["can_execute"] is True
+    assert all(move["target"] == 4000 and move["speed"] == 2400 for move in preview["steps"][0]["moves"])
+    assert preview["message"].startswith("Each step sends all six raw targets together")
+    assert "token" in preview
+    assert not any(call[0] in ("move", "queue", "sync_packet", "write") for call in fake_controller)
+
+
+def test_physical_macro_uses_manual_sync_path_and_exact_confirmation(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
+    steps = [{"positions": {servo_id: 1000 + servo_id for servo_id in range(1, 7)}, "duration_ms": 300}]
+    preview = control.prepare_macro("Grab", "macro-v1", steps, False)
+    assert preview["can_execute"] is True
+    assert [move["target"] for move in preview["steps"][0]["moves"]] == [1001, 1002, 1003, 1004, 1005, 1006]
+    assert not any(call[0] in ("move", "sync_packet") for call in fake_controller)
+    with pytest.raises(control.HardwareControlError, match="power cutoff"):
+        control.execute_macro(preview["token"], preview["phrase"], "macro-v1",
+                              off_body=True, power_cut_tested=False, cord_path_clear=True,
+                              stopped=False)
+    assert not any(call[0] in ("move", "sync_packet") for call in fake_controller)
+    preview = control.prepare_macro("Grab", "macro-v1", steps, False)
+    result = control.execute_macro(preview["token"], preview["phrase"], "macro-v1",
+                                   off_body=True, power_cut_tested=True, cord_path_clear=True,
+                                   stopped=False)
+    assert result["accepted"] is True and len(result["steps_completed"]) == 1
+    assert [call for call in fake_controller if call[0] == "sync_packet"] == [
+        ("sync_packet", tuple((servo_id, 1000 + servo_id, 2400, 50) for servo_id in range(1, 7)))
+    ]
+
+
 def test_one_use_confirmation_and_stale_calibration_block_writes(fake_controller, monkeypatch):
     monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "1")
     calibration = measured_calibration()

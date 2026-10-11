@@ -19,7 +19,7 @@ def pose(value=0):
 
 def test_macro_round_trip_and_import_export():
     with TestClient(app) as client:
-        payload = {"name": "Test wave", "description": "Two steps", "kind": "sequence", "steps": [{"positions": pose(20), "duration_ms": 200}, {"positions": pose(70), "duration_ms": 200}]}
+        payload = {"name": "Test wave", "description": "Two steps", "kind": "sequence", "steps": [{"positions": pose(1200), "duration_ms": 200}, {"positions": pose(3500), "duration_ms": 200}]}
         created = client.post("/api/macros", json=payload)
         assert created.status_code == 201
         macro_id = created.json()["id"]
@@ -27,9 +27,9 @@ def test_macro_round_trip_and_import_export():
         payload["name"] = "Edited wave"
         assert client.put(f"/api/macros/{macro_id}", json=payload).json()["name"] == "Edited wave"
         exported = client.get("/api/macros/export").json()
-        assert exported["version"] == 2
+        assert exported["version"] == 3
         assert any(m["name"] == "Edited wave" for m in exported["macros"])
-        assert client.post("/api/macros/import", json={"version": 2, "macros": [payload]}).json() == {"imported": 1}
+        assert client.post("/api/macros/import", json={"version": 3, "macros": [payload]}).json() == {"imported": 1}
         assert client.delete(f"/api/macros/{macro_id}").status_code == 204
 
 
@@ -47,7 +47,16 @@ def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
         payload = {"version": 1, "macros": [{"name": "Legacy mapping check", "description": "", "kind": "pose", "steps": [{"positions": old_positions, "duration_ms": 700}]}]}
         assert client.post("/api/macros/import", json=payload).json() == {"imported": 1}
         imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Legacy mapping check")
-        assert imported["steps"][0]["positions"] == {"1": 60, "2": 50, "3": 20, "4": 10, "5": 30, "6": 40}
+        assert imported["steps"][0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
+
+
+def test_version_two_percent_import_is_converted_to_raw_counts():
+    with TestClient(app) as client:
+        old = {"name": "Percent export", "description": "", "kind": "pose",
+               "steps": [{"positions": pose(75), "duration_ms": 500}]}
+        assert client.post("/api/macros/import", json={"version": 2, "macros": [old]}).status_code == 200
+        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Percent export")
+        assert imported["steps"][0]["positions"] == pose(3000)
 
 
 def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeypatch):
@@ -61,8 +70,8 @@ def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeyp
     main_module.init_db()
     with main_module.db() as conn:
         stored = json.loads(conn.execute("SELECT steps FROM macros WHERE id='old'").fetchone()[0])
-        assert stored[0]["positions"] == {"1": 60, "2": 50, "3": 20, "4": 10, "5": 30, "6": 40}
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert stored[0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_fresh_sample_gestures_use_correct_finger_ids(tmp_path, monkeypatch):
@@ -71,8 +80,8 @@ def test_fresh_sample_gestures_use_correct_finger_ids(tmp_path, monkeypatch):
     with main_module.db() as conn:
         point = json.loads(conn.execute("SELECT steps FROM macros WHERE name='Point'").fetchone()[0])[0]["positions"]
         pinch = json.loads(conn.execute("SELECT steps FROM macros WHERE name='Pinch'").fetchone()[0])[0]["positions"]
-    assert point == {"1": 80, "2": 80, "3": 80, "4": 0, "5": 75, "6": 55}
-    assert pinch == {"1": 0, "2": 0, "3": 0, "4": 45, "5": 55, "6": 75}
+    assert point == {"1": 3200, "2": 3200, "3": 3200, "4": 0, "5": 3000, "6": 2200}
+    assert pinch == {"1": 0, "2": 0, "3": 0, "4": 1800, "5": 2200, "6": 3000}
 
 
 def test_stop_latches_and_reset_allows_simulation():

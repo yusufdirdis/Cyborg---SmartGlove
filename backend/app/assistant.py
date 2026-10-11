@@ -97,16 +97,17 @@ You never move anything yourself. You draft at most one proposal; a human must c
 Servos, in this exact order (IDs 1-6):
 {servos}
 A position is an integer percentage: 0 = finger fully open/relaxed, 100 = fully flexed.
+Saved macro step positions are raw servo target counts from 0 to 4000, matching Manual Control.
 Answer ONLY with one JSON object, no prose around it:
 {{"reply": short friendly sentence, "action": "none"|"pose"|"macro"|"save_macro"|"stop",
   "positions": six integers 0-100 in servo ID order (only for "pose"),
   "label": short pose name (only for "pose"),
   "macro_id": id of a saved macro (only for "macro"),
   "name": macro name, 1-60 characters (only for "save_macro"),
-  "steps": 1-{SAVE_STEPS_MAX} objects {{"positions": six integers 0-100, "duration_ms": {STEP_MS_MIN}-{STEP_MS_MAX}}} (only for "save_macro"),
+  "steps": 1-{SAVE_STEPS_MAX} objects {{"positions": six integers 0-4000 counts, "duration_ms": {STEP_MS_MIN}-{STEP_MS_MAX}}} (only for "save_macro"),
   "append_to_macro_id": id of a saved macro to extend (optional, only for "save_macro")}}
 Prefer "macro" when a saved macro matches the request. Use "stop" when the user asks to stop, halt or freeze.
-"Save as X" or "make an N-step Y" means "save_macro"; to save the pose or movement you last proposed, reuse its exact positions in the steps.
+"Save as X" or "make an N-step Y" means "save_macro"; save macro steps as raw 0–4000 counts. If you are saving a pose you proposed in percentages, convert each value to counts by multiplying by 40.
 Use "none" for questions or anything that is not a hand gesture. Never claim the hand already moved or that anything was saved; say it is ready for confirmation.
 {MACROS_MARKER} {json.dumps(macros)}"""
 
@@ -249,8 +250,8 @@ def parse_output(text: str, servo_ids: list[int], macros: list[dict]) -> tuple[s
         steps = []
         for step in raw_steps:
             values = step.positions or []
-            if len(values) != len(servo_ids) or any(not 0 <= v <= 100 for v in values):
-                return f"Every saved step needs six values from 0 to 100, so nothing was saved. {TEXT_ONLY}", None
+            if len(values) != len(servo_ids) or any(not 0 <= v <= 4000 for v in values):
+                return f"Every saved step needs six raw target counts from 0 to 4000, so nothing was saved. {TEXT_ONLY}", None
             if step.duration_ms is None or not STEP_MS_MIN <= step.duration_ms <= STEP_MS_MAX:
                 return f"Every saved step needs a duration from {STEP_MS_MIN} to {STEP_MS_MAX} ms, so nothing was saved. {TEXT_ONLY}", None
             steps.append({"positions": dict(zip(servo_ids, values)), "duration_ms": step.duration_ms})
@@ -440,6 +441,7 @@ when the user shows a hand gesture on camera, say what you see and propose the m
 Servos, in this exact order (IDs 1-6):
 {servos}
 A position is an integer percentage: 0 = finger fully open/relaxed, 100 = fully flexed.
+Saved macro step positions are raw servo target counts from 0 to 4000, matching Manual Control.
 Saved macros, as id (name): {saved}. Prefer a matching saved macro over a new pose.
 When the user asks to save a movement as a macro, call propose_save_macro with its steps; to save what you last proposed, reuse those exact positions.
 Only call a tool when the user asks for a move, a mirror, a save or a stop. Never call a tool for questions, small talk or descriptions.
@@ -467,7 +469,7 @@ LIVE_TOOLS = [{"functionDeclarations": [
          "steps": {"type": "ARRAY", "description": "One to 30 steps.",
                    "items": {"type": "OBJECT", "properties": {
                        "positions": {"type": "ARRAY", "items": {"type": "INTEGER"},
-                                     "description": "Six integers from 0 to 100 in servo ID order."},
+                                     "description": "Six raw servo target counts from 0 to 4000 in servo ID order."},
                        "duration_ms": {"type": "INTEGER", "description": "Step duration from 100 to 10000 milliseconds."},
                    }, "required": ["positions", "duration_ms"]}},
          "append_to_macro_id": {"type": "STRING", "description": "Optional id of a saved macro to extend."},

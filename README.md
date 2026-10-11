@@ -1,6 +1,6 @@
 # handoff — Phase 1
 
-A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, AI Assistant, Calibration, Devices, and Settings sections. FastAPI provides persistent SQLite macros and calibration, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
+A local control studio for a six-servo smart-glasses hand glove. The React/TypeScript/Tailwind interface has Dashboard, Manual Control, Macro Studio, AI Vision, AI Assistant, Devices, and Settings sections. FastAPI provides persistent SQLite macros and calibration data, six-channel simulation, stop handling, WebSocket telemetry, live servo status, and guarded direct position control for each servo.
 
 ## Servo map
 
@@ -42,16 +42,16 @@ npm run dev -- --port 5173
 Open <http://127.0.0.1:5173/>. The API docs are at <http://127.0.0.1:8000/docs>. The Vite server proxies `/api` and `/ws` to the local API. Keep both terminals running.
 
 
-On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 2 JSON file; importing adds copies of its macros. Older version 1 exports are accepted and remapped to the corrected finger IDs. Sequences have up to 30 steps with 100–10,000 ms duration per step.
+On first launch, `backend/handos.sqlite3` is created with five editable sample poses and six unverified calibration records. To use another database path, set `HANDOS_DB` before starting the API. Macro export downloads a version 3 JSON file with raw 0–4000 counts; older version 1 and 2 exports are converted when imported. Existing saved percentages are migrated to counts once. Sequences have up to 30 steps with 100–10,000 ms simulation duration per step.
 
 ## Try the first milestone
 
 1. Open **Macro Studio** and choose **New macro**.
-2. Set a name and six finger percentages, then **Save macro**.
+2. Set a name and six raw servo target counts from 0–4000, matching Manual Control, then **Save macro**.
 3. Choose **Play**. The Dashboard channel meters and WebSocket telemetry update as the six simulated channels move.
 4. Use **Stop** to latch the software stop; **Reset simulation** allows movement again.
 
-Manual Control lets you stage physical servo targets and review them before sending. Target edits stay pending until **Confirm movement** is clicked. Saved macros still preview in simulation. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
+Manual Control lets you stage physical servo targets and review them before sending. Target edits stay pending until **Confirm movement** is clicked. Saved macros play in simulation. **Test on glove** opens a physical preview and sends each step's six raw targets in one synchronized packet, using the same 0–4000 count range and default speed as Manual Control. It requires an off-body glove, a tested power cutoff, a clear cord path, and typed confirmation. The AI Vision page can show a browser camera preview. It does not analyze frames. Detection events never trigger a macro.
 
 ## AI Assistant (chat and voice)
 
@@ -65,13 +65,13 @@ A floating **Live** button on every page opens a real-time Gemini Live session w
 
 ## Read-only controller status
 
-Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros remain simulation only.
+Connect the servo controller by USB and power its servo bus. The Dashboard hardware circle turns green when IDs 1–6 all respond with position, voltage, temperature, and moving status. The Devices page also reads position mode and torque state for each servo, has a refresh button, and refreshes automatically every 20 seconds. This status check never sends a position command. Saved macros can be previewed in simulation or sent to the glove through Macro Studio after the explicit physical confirmation is completed.
 
 ### Live 3D hand
 
 The Dashboard's **YOUR GLOVE** panel shows a 3D model of the glove, built from photos of the real hardware: back and palm cord guides on every finger segment, both curved anchor blocks, cords and tubes. Drag to rotate; switching the **Simulated / Physical** toggle swings the view back to straight on. **Simulated** follows macro playback. **Physical** follows the real servos: while the website is open, the API reads the six present positions about 10 times a second (read-only, never a command, sharing the controller lock with moves and status checks) and maps each raw count to 0–100 % curl with that servo's saved open and closed counts. A **Calibration unverified** badge shows until those counts are measured. The thumb uses collision avoidance so it rests on top of curled fingers instead of passing through them. Set `HANDOFF_LIVE_POSITIONS=0` to turn the position reads off.
 
-The **Calibration** page lets you read the current position into an unsaved form, edit endpoints and travel limits, mark measurements, then save them to the local database. Position capture is read-only. The initial values are placeholders: measure the actual hardware before marking limits verified. Updating limits clears their verified state until you verify and save them again.
+Calibration editing is not exposed in the website. The backend stores calibration data for the separate calibration-aware test routes and the Dashboard's physical hand view, which uses saved open and closed counts to map servo positions to finger curl. Manual Control and physical macros use raw counts directly, capped at 0–4000, with live device-health and Stop checks.
 
 ### Website hardware controls
 
@@ -79,7 +79,7 @@ The **Calibration** page lets you read the current position into an unsaved form
 
 On 2026-10-10, a supervised terminal test sent one Servo 1 command from 1004 to 1250 at requested speed 2400 and acceleration 50. It settled at 1248 in about 0.5 seconds. This does not establish the speed or safe travel of other channels or simultaneous moves. Start at a lower setting for channels whose response has not been observed. The manufacturer's [STS3215 specifications](https://www.feetechrc.com/525603.html) describe the servo's 12 V position control and higher no-load speed; 2400 is a requested controller speed, not a guarantee of actual glove speed.
 
-Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits or the explicit torque-enable button to write to motors. Health checks remain enforced for every selected servo. The live route never enables torque automatically, returns home, or connects saved macros to real motors.
+Physical writes are **off by default**. The local API must be started with `HANDOFF_ENABLE_HARDWARE_WRITES=1` for live target edits, the explicit torque-enable button, or confirmed macro playback to write to motors. Manual Control and macros share the same device-health and Stop checks, raw 0–4000 count range, synchronized packet writer, and default speed of 2400. Macro step duration controls simulation timing only. Macro playback never enables torque automatically or returns home.
 
 When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
 
@@ -116,7 +116,7 @@ The backend tests use a fake serial driver and send no USB writes. The frontend'
 
 1. Verify the builder-supplied finger assignments during supervised off-body calibration. The status check confirms IDs 1–6 respond, but cannot independently identify which finger each servo moves.
 2. With the glove off-body, establish each attached cord's direction and safe travel, then record measured limits through the local API. Keep the independent servo power cutoff ready.
-3. Test each channel's direction and response at the chosen manual speeds with the glove off-body. Test synchronized moves with two servos first while watching the power supply and cord paths. The current website does not physically play macros.
+3. Test each channel's direction and response at the chosen manual speeds with the glove off-body. Test synchronized moves with two servos first while watching the power supply and cord paths. Macro playback uses the same raw-count path as Manual Control and requires its physical review confirmations.
 4. Connect the glasses camera or object detector. Send real events to `POST /api/vision/detection` with `source: "external"`; add a reviewable object-to-macro mapping and user confirmation before allowing any resulting motion.
 
 The API is intended for local development and has no user authentication. Do not expose it to an untrusted network.
