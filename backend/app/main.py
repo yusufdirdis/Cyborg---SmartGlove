@@ -560,9 +560,9 @@ async def play_macro(macro_id: str):
     return {"accepted": True, "mode": "simulation"}
 
 
-@app.post("/api/macros/{macro_id}/hardware/preview")
-def preview_hardware_macro(macro_id: str, request: Request):
-    from .hardware_control import HardwareControlError, prepare_macro
+@app.post("/api/macros/{macro_id}/hardware/run")
+def run_hardware_macro(macro_id: str, request: Request):
+    from .hardware_control import HardwareControlError, run_macro
 
     _local_hardware_request(request)
     with db() as conn:
@@ -571,27 +571,8 @@ def preview_hardware_macro(macro_id: str, request: Request):
         raise HTTPException(404, "Macro not found")
     steps = [Step.model_validate(item).model_dump() for item in json.loads(row["steps"])]
     try:
-        return prepare_macro(row["name"], _macro_fingerprint(row), steps, sim.stopped)
-    except HardwareControlError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/macros/{macro_id}/hardware/execute")
-def execute_hardware_macro(macro_id: str, payload: JogConfirmInput, request: Request):
-    from .hardware_control import HardwareControlError, execute_macro
-
-    _local_hardware_request(request)
-    with db() as conn:
-        row = conn.execute("SELECT * FROM macros WHERE id=?", (macro_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404, "Macro not found")
-    try:
-        return execute_macro(payload.token, payload.phrase, _macro_fingerprint(row),
-                             off_body=payload.off_body,
-                             power_cut_tested=payload.power_cut_tested,
-                             cord_path_clear=payload.cord_path_clear,
-                             stopped=sim.stopped,
-                             is_stopped=lambda: sim.stopped)
+        return run_macro(row["name"], _macro_fingerprint(row), steps,
+                         stopped=sim.stopped, is_stopped=lambda: sim.stopped)
     except HardwareControlError as exc:
         raise HTTPException(409, str(exc)) from exc
 
