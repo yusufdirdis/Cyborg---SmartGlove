@@ -624,6 +624,25 @@ def calibration():
         return [{"servo_id": r["servo_id"], "name": SERVO_NAMES[r["servo_id"]], **json.loads(r["data"])} for r in conn.execute("SELECT * FROM calibration ORDER BY servo_id")]
 
 
+@app.get("/api/calibration/export")
+def export_calibration():
+    """Saved calibration for servos 1–6 plus a read-only live snapshot. Never sends a command."""
+    from datetime import datetime, timezone
+
+    from .servo_status import scan_servos
+
+    reading = scan_servos()
+    live = {servo["id"]: servo for servo in reading.get("servos", [])}
+    live_keys = ("position", "torque_enabled", "moving", "mode", "voltage_v", "temperature_c")
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM calibration ORDER BY servo_id").fetchall()
+    servos = [{"servo_id": r["servo_id"], "name": SERVO_NAMES[r["servo_id"]], **json.loads(r["data"]),
+               "live": {key: live[r["servo_id"]].get(key) for key in live_keys} if r["servo_id"] in live else None}
+              for r in rows]
+    return {"version": 1, "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "controller": {key: reading.get(key) for key in ("connected", "port", "error")}, "servos": servos}
+
+
 @app.put("/api/calibration/{servo_id}")
 def update_calibration(servo_id: int, payload: CalibrationInput):
     if servo_id not in SERVO_NAMES:
