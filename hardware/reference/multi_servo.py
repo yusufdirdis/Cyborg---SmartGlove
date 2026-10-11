@@ -16,10 +16,15 @@ BAUD_RATE = 1_000_000
 SERVO_SPEED = 2400
 SERVO_ACCELERATION = 50
 MOVE_PAUSE_SECONDS = 1.0
+MOVE_POLL_SECONDS = 0.1
+MOVE_TIMEOUT_SECONDS = 30.0
+POSITION_TOLERANCE = 5
 POSITION_MIN = 0
-POSITION_MAX = 4095
+POSITION_MAX = 4000
 SERVO_IDS = (1, 2, 3, 4, 5, 6, 7, 8)
 REG_PRESENT_POSITION = 56
+REG_TORQUE_ENABLE = 40
+REG_MOVING = 66
 
 
 class CommandError(Exception):
@@ -38,6 +43,13 @@ class MultiServoMover:
         if position is None:
             raise CommandError(f"Could not read Servo {servo_id}'s position.")
         return int(position)
+
+    def read_register(self, servo_id: int, address: int) -> int:
+        with contextlib.redirect_stdout(io.StringIO()):
+            value = self.driver.readReg(servo_id, address)
+        if value is None:
+            raise CommandError(f"Could not read Servo {servo_id}, register {address}.")
+        return int(value)
 
     def discover(self) -> None:
         print("Discovering servo IDs 1–8 (read only)...")
@@ -97,6 +109,11 @@ class MultiServoMover:
         # Read all starting positions before sending any target, so a read
         # failure cannot leave only part of this requested group in motion.
         starts = {servo_id: self.read_position(servo_id) for servo_id in sorted(targets)}
+        torque_off = [servo_id for servo_id in sorted(targets)
+                      if self.read_register(servo_id, REG_TORQUE_ENABLE) != 1]
+        if torque_off:
+            ids = ", ".join(str(servo_id) for servo_id in torque_off)
+            raise CommandError(f"Torque is off for Servo(s) {ids}; no targets were sent.")
         print("Sending synchronized targets:")
         for servo_id in sorted(targets):
             print(
@@ -125,10 +142,34 @@ class MultiServoMover:
 
         if clear_pending:
             self.pending_targets.clear()
-        time.sleep(MOVE_PAUSE_SECONDS)
+        self.wait_for_targets(targets)
         print("Positions after the move:")
         for servo_id in sorted(targets):
             print(f"  Servo {servo_id} | ending position={self.read_position(servo_id)}")
+
+    def wait_for_targets(self, targets: Dict[int, int]) -> None:
+        """Wait until each selected servo stops within the target tolerance."""
+        deadline = time.monotonic() + MOVE_TIMEOUT_SECONDS
+        time.sleep(MOVE_PAUSE_SECONDS)
+        while True:
+            positions = {servo_id: self.read_position(servo_id)
+                         for servo_id in sorted(targets)}
+            moving = {servo_id: self.read_register(servo_id, REG_MOVING)
+                      for servo_id in sorted(targets)}
+            unfinished = [servo_id for servo_id, target in targets.items()
+                          if moving[servo_id] != 0 or
+                          abs(positions[servo_id] - target) > POSITION_TOLERANCE]
+            if not unfinished:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                details = ", ".join(
+                    f"Servo {servo_id}: {positions[servo_id]} (target {targets[servo_id]}, "
+                    f"moving={moving[servo_id]})"
+                    for servo_id in sorted(unfinished)
+                )
+                raise CommandError(f"Timed out waiting for targets: {details}.")
+            time.sleep(min(MOVE_POLL_SECONDS, remaining))
 
     def send_pending(self) -> None:
         self.send_targets(dict(self.pending_targets), clear_pending=True)
@@ -150,9 +191,17 @@ class MultiServoMover:
 
 def parse_target_assignments(tokens: Iterable[str]) -> Dict[int, int]:
     targets: Dict[int, int] = {}
-    for token in tokens:
+    parts = list(tokens)
+    index = 0
+    while index < len(parts):
+        token = parts[index]
         try:
-            servo_text, position_text = token.split("=", 1)
+            if index + 2 < len(parts) and parts[index + 1] == "=":
+                servo_text, position_text = token, parts[index + 2]
+                index += 3
+            else:
+                servo_text, position_text = token.split("=", 1)
+                index += 1
             servo_id = int(servo_text)
             position = int(position_text)
         except ValueError as exc:

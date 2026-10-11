@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import assistant
 
+
 SERVO_NAMES = {1: "Pinky finger", 2: "Ring finger", 3: "Middle finger", 4: "Index finger", 5: "Thumb flexion (up/down)", 6: "Thumb side-to-side"}
 MAX_SERVO_COUNT = 4000  # User-requested app cap; not a measured mechanical limit.
 # The first release used index, middle, thumb flexion, thumb opposition, ring,
@@ -147,10 +148,12 @@ class SimulationAdapter:
         self.task: asyncio.Task | None = None
         self.last_event = "Simulation ready"
         self.vision = None
+        # Read-only physical servo positions (raw counts) for the 3D hand.
+        self.physical = {"connected": False, "positions": {sid: None for sid in SERVO_NAMES}, "read_at": None, "error": None}
         self.listeners: set[WebSocket] = set()
 
     def snapshot(self):
-        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
+        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "physical": self.physical, "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
 
     async def broadcast(self):
         message = self.snapshot()
@@ -206,10 +209,39 @@ class SimulationAdapter:
 sim = SimulationAdapter()
 
 
+async def refresh_physical(read) -> dict | None:
+    """Store one read-only position reading and broadcast it if anything but its timestamp changed."""
+    reading = await asyncio.to_thread(read)
+    if reading is None:  # controller busy with a status check or move
+        return None
+    changed = {k: v for k, v in reading.items() if k != "read_at"} != {k: v for k, v in sim.physical.items() if k != "read_at"}
+    sim.physical = reading
+    if changed:
+        await sim.broadcast()
+    return reading
+
+
+async def poll_physical_positions():
+    from .live_positions import IDLE_INTERVAL_S, POLL_INTERVAL_S, read_positions
+
+    while True:
+        try:
+            reading = await refresh_physical(read_positions) if sim.listeners else None
+        except Exception as exc:  # keep polling; a USB hiccup must not end live updates
+            reading = None
+            sim.physical = {**sim.physical, "connected": False, "error": f"Live position read failed: {exc}"}
+        await asyncio.sleep(POLL_INTERVAL_S if reading and reading["connected"] else IDLE_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from .live_positions import enabled as live_positions_enabled
+
     init_db()
+    poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
     yield
+    if poller:
+        poller.cancel()
     if sim.task and not sim.task.done():
         sim.task.cancel()
 
@@ -251,7 +283,19 @@ class JogConfirmInput(BaseModel):
 class PositionPreviewInput(BaseModel):
     servo_id: int = Field(ge=1, le=6)
     target: int = Field(ge=0, le=MAX_SERVO_COUNT)
-    speed: int = Field(ge=50, le=500)
+    speed: int = Field(ge=50, le=2400)
+
+
+class GroupPreviewInput(BaseModel):
+    moves: list[PositionPreviewInput] = Field(min_length=2, max_length=6)
+
+
+class LiveMoveInput(BaseModel):
+    moves: list[PositionPreviewInput] = Field(min_length=1, max_length=6)
+
+
+class TorqueEnableInput(BaseModel):
+    servo_ids: list[int] = Field(min_length=1, max_length=6)
 
 
 def _local_hardware_request(request: Request) -> None:
@@ -352,6 +396,80 @@ def execute_hardware_position(payload: JogConfirmInput, request: Request):
                                 cord_path_clear=payload.cord_path_clear,
                                 calibration=calibration, stopped=sim.stopped,
                                 is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/group/preview")
+def preview_hardware_group(payload: GroupPreviewInput, request: Request):
+    from .hardware_control import HardwareControlError, prepare_group
+
+    _local_hardware_request(request)
+    ids = [move.servo_id for move in payload.moves]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "Each servo can appear only once in a group move.")
+    with db() as conn:
+        rows = {row["servo_id"]: row["data"] for row in conn.execute(
+            f"SELECT servo_id, data FROM calibration WHERE servo_id IN ({','.join('?' for _ in ids)})", ids
+        )}
+    if set(rows) != set(ids):
+        raise HTTPException(409, "Calibration is unavailable for a selected servo.")
+    calibrations = {servo_id: CalibrationInput.model_validate_json(rows[servo_id]) for servo_id in ids}
+    try:
+        return prepare_group([(move.servo_id, move.target, move.speed) for move in payload.moves],
+                             calibrations, sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/group/execute")
+def execute_hardware_group(payload: JogConfirmInput, request: Request):
+    from .hardware_control import HardwareControlError, execute_group, pending_group_servo_ids
+
+    _local_hardware_request(request)
+    ids = pending_group_servo_ids(payload.token)
+    if ids is None:
+        raise HTTPException(409, "Move preview expired. Check the group move again.")
+    with db() as conn:
+        rows = {row["servo_id"]: row["data"] for row in conn.execute(
+            f"SELECT servo_id, data FROM calibration WHERE servo_id IN ({','.join('?' for _ in ids)})", ids
+        )}
+    if set(rows) != set(ids):
+        raise HTTPException(409, "Calibration is unavailable for a selected servo.")
+    calibrations = {servo_id: CalibrationInput.model_validate_json(rows[servo_id]) for servo_id in ids}
+    try:
+        return execute_group(payload.token, payload.phrase,
+                             off_body=payload.off_body,
+                             power_cut_tested=payload.power_cut_tested,
+                             cord_path_clear=payload.cord_path_clear,
+                             calibrations=calibrations, stopped=sim.stopped,
+                             is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/live")
+def move_hardware_live(payload: LiveMoveInput, request: Request):
+    from .hardware_control import HardwareControlError, move_live
+
+    _local_hardware_request(request)
+    ids = [move.servo_id for move in payload.moves]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "Each servo can appear only once in a live move.")
+    try:
+        return move_live([(move.servo_id, move.target, move.speed) for move in payload.moves],
+                         sim.stopped, is_stopped=lambda: sim.stopped)
+    except HardwareControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/hardware/torque/enable")
+def enable_hardware_torque(payload: TorqueEnableInput, request: Request):
+    from .hardware_control import HardwareControlError, enable_torque
+
+    _local_hardware_request(request)
+    try:
+        return enable_torque(payload.servo_ids, sim.stopped)
     except HardwareControlError as exc:
         raise HTTPException(409, str(exc)) from exc
 

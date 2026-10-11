@@ -7,7 +7,7 @@ These are the two Python scripts Yusuf sent by message, saved under descriptive 
 | `servo_test.py` | Discover servo IDs and read status; also contains movement tests. |
 | `multi_servo.py` | Queue and send position commands to several servos. |
 
-Both scripts require the `feetech_tuna` Python module and a serial port argument. A copy of that library is now included under `backend/feetech_tuna`. The scripts currently target IDs 1–8, while the glove design uses IDs 1–6. They accept raw 0–4095 positions without the glove's measured mechanical limits. The handoff website applies the user's narrower 0–4000 numeric cap and separate direct-test limits. Do not use these reference scripts' movement commands on a worn or tensioned glove.
+Both scripts require the `feetech_tuna` Python module and a serial port argument. A copy of that library is included under `backend/feetech_tuna`. The scripts accept raw target counts from 0–4000; the servos' configured angle registers read 0–4095. That numeric cap does not establish safe tendon travel. Use the multi-servo command format `sync 1=2000 3=4000 2=1000` to set different targets in one synchronized write. Torque must already be enabled for each servo being moved. Do not use movement commands on a worn or tensioned glove.
 
 The builder identified the glove's physical IDs as 1=pinky, 2=ring, 3=middle, 4=index, 5=thumb flexion, and 6=thumb side-to-side opposition. This differs from the app's first-release mapping and from the scripts' eight-servo assumption.
 

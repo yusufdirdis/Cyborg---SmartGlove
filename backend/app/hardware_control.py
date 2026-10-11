@@ -49,11 +49,56 @@ class FeetechServoTransport:
             raise HardwareControlError(f"Could not read Servo {servo_id}'s position.")
         return int(value)
 
-    def write_position(self, servo_id: int, count: int, speed: int) -> None:
+    def write_position(self, servo_id: int, count: int, speed: int, acceleration: int | None = None) -> None:
         with contextlib.redirect_stdout(io.StringIO()):
-            result, error = self.driver.packetHandler.WritePosEx(servo_id, count, speed, ACCELERATION)
+            result, error = self.driver.packetHandler.WritePosEx(
+                servo_id, count, speed, POSITION_ACCELERATION if acceleration is None else acceleration
+            )
         if result != COMM_SUCCESS or error:
             raise HardwareControlError("The controller rejected the movement command. Cut power if the glove moves unexpectedly.")
+
+    def write_positions_together(self, moves: list[tuple[int, int, int]]) -> None:
+        handler = self.driver.packetHandler
+        packet = handler.groupSyncWrite
+        packet.clearParam()
+        try:
+            for servo_id, count, speed in moves:
+                if not handler.SyncWritePosEx(servo_id, count, speed, POSITION_ACCELERATION):
+                    raise HardwareControlError(f"Could not queue Servo {servo_id}; no group command was sent.")
+            if packet.txPacket() != COMM_SUCCESS:
+                raise HardwareControlError("Group command failed to send. Cut power if the glove moves unexpectedly.")
+        finally:
+            packet.clearParam()
+
+    def wait_for_targets(self, targets: dict[int, int], is_stopped: Callable[[], bool] | None = None) -> dict[int, int]:
+        """Wait until each requested position is reached and motion stops."""
+        deadline = time.monotonic() + LIVE_MOVE_TIMEOUT_SECONDS
+        time.sleep(min(LIVE_MOVE_INITIAL_WAIT_SECONDS, LIVE_MOVE_TIMEOUT_SECONDS))
+        positions: dict[int, int] = {}
+        while True:
+            if is_stopped and is_stopped():
+                raise HardwareControlError("Software Stop was pressed while the servos were moving.")
+            states = {}
+            for servo_id in sorted(targets):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    position = self.driver.readReg(servo_id, 56)
+                    moving = self.driver.readReg(servo_id, 66)
+                if position is None or moving is None:
+                    raise HardwareControlError(f"Could not verify Servo {servo_id}'s movement.")
+                positions[servo_id] = int(position)
+                states[servo_id] = int(moving)
+            unfinished = [servo_id for servo_id, target in targets.items()
+                          if states[servo_id] != 0 or abs(positions[servo_id] - target) > LIVE_POSITION_TOLERANCE]
+            if not unfinished:
+                return positions
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                details = ", ".join(
+                    f"Servo {servo_id}: {positions[servo_id]} (target {targets[servo_id]}, moving={states[servo_id]})"
+                    for servo_id in sorted(unfinished)
+                )
+                raise HardwareControlError(f"Timed out waiting for servos to settle: {details}.")
+            time.sleep(min(LIVE_MOVE_POLL_SECONDS, remaining))
 
     def disable_torque(self) -> list[int]:
         failed = []
@@ -88,13 +133,29 @@ class PendingPosition:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class PendingGroup:
+    token: str
+    moves: tuple[tuple[int, int, int, int], ...]  # id, start, target, speed
+    phrase: str
+    calibrations: tuple[str, ...]
+    expires_at: float
+
+
 _pending: PendingJog | None = None
 _pending_lock = threading.Lock()
 _position_pending: PendingPosition | None = None
 _position_pending_lock = threading.Lock()
+_group_pending: PendingGroup | None = None
+_group_pending_lock = threading.Lock()
 POSITION_SPEED_MIN = 50
-POSITION_SPEED_MAX = 500
-POSITION_SPEED_DEFAULT = 250
+POSITION_SPEED_MAX = 2400
+POSITION_SPEED_DEFAULT = 2400
+POSITION_ACCELERATION = 50
+LIVE_POSITION_TOLERANCE = 5
+LIVE_MOVE_INITIAL_WAIT_SECONDS = 1.0
+LIVE_MOVE_POLL_SECONDS = 0.1
+LIVE_MOVE_TIMEOUT_SECONDS = 30.0
 
 
 def writes_enabled() -> bool:
@@ -102,11 +163,13 @@ def writes_enabled() -> bool:
 
 
 def clear_pending() -> None:
-    global _pending, _position_pending
+    global _pending, _position_pending, _group_pending
     with _pending_lock:
         _pending = None
     with _position_pending_lock:
         _position_pending = None
+    with _group_pending_lock:
+        _group_pending = None
 
 
 def pending_servo_id(token: str) -> int | None:
@@ -120,6 +183,13 @@ def pending_position_servo_id(token: str) -> int | None:
     with _position_pending_lock:
         if _position_pending and _position_pending.token == token and time.monotonic() <= _position_pending.expires_at:
             return _position_pending.servo_id
+    return None
+
+
+def pending_group_servo_ids(token: str) -> list[int] | None:
+    with _group_pending_lock:
+        if _group_pending and _group_pending.token == token and time.monotonic() <= _group_pending.expires_at:
+            return [servo_id for servo_id, _, _, _ in _group_pending.moves]
     return None
 
 
@@ -224,7 +294,7 @@ def execute_jog(token: str, phrase: str, *, off_body: bool, power_cut_tested: bo
                 raise HardwareControlError(str(exc)) from exc
             if is_stopped and is_stopped():
                 raise HardwareControlError("Software stop was pressed before the command. No move was sent.")
-            FeetechServoTransport(driver).write_position(pending.servo_id, target, SPEED_STEPS_PER_SECOND)
+            FeetechServoTransport(driver).write_position(pending.servo_id, target, SPEED_STEPS_PER_SECOND, ACCELERATION)
     except BenchJogError as exc:
         raise HardwareControlError(str(exc)) from exc
     return {"accepted": True, "servo_id": pending.servo_id, "target": pending.target,
@@ -235,7 +305,7 @@ def prepare_position(servo_id: int, target: int, speed: int, calibration, stoppe
     global _position_pending
     clear_pending()
     if servo_id not in range(1, 7) or not POSITION_SPEED_MIN <= speed <= POSITION_SPEED_MAX:
-        raise HardwareControlError("Choose Servo 1–6 and a speed from 50 to 500 counts per second.")
+        raise HardwareControlError("Choose Servo 1–6 and a speed from 50 to 2400 counts per second.")
     try:
         with _driver() as driver:
             before = read_snapshot(driver, servo_id)
@@ -305,6 +375,197 @@ def execute_position(token: str, phrase: str, *, off_body: bool, power_cut_teste
         raise HardwareControlError(str(exc)) from exc
     return {"accepted": True, "servo_id": pending.servo_id, "target": pending.target,
             "speed": pending.speed, "message": "One position command sent. Watch the glove and use Stop or the physical power cutoff if needed."}
+
+
+def prepare_group(moves: list[tuple[int, int, int]], calibrations: dict[int, object], stopped: bool) -> dict:
+    """Preview one packet that moves two to six servos together."""
+    global _group_pending
+    clear_pending()
+    ids = [servo_id for servo_id, _, _ in moves]
+    if not 2 <= len(moves) <= 6 or len(ids) != len(set(ids)) or any(
+        servo_id not in range(1, 7) or not 0 <= target <= 4000 or
+        not POSITION_SPEED_MIN <= speed <= POSITION_SPEED_MAX
+        for servo_id, target, speed in moves
+    ):
+        raise HardwareControlError("Select 2–6 distinct servos, with targets 0–4000 and speeds 50–2400.")
+    try:
+        with _driver() as driver:
+            _check_bus_still(driver)
+            snapshots = {servo_id: read_snapshot(driver, servo_id) for servo_id in ids}
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    blocked = []
+    preview_moves = []
+    for servo_id, target, speed in moves:
+        snapshot = snapshots[servo_id]
+        try:
+            validate_snapshot(snapshot, margin=0)
+            _check_calibration(calibrations[servo_id], snapshot.position, target)
+            if target == snapshot.position:
+                blocked.append(f"Servo {servo_id} is already at its target.")
+        except (BenchJogError, HardwareControlError) as exc:
+            blocked.append(f"Servo {servo_id}: {exc}")
+        preview_moves.append({"servo_id": servo_id, "start": snapshot.position, "target": target, "speed": speed})
+    if stopped:
+        blocked.append("Software stop is latched.")
+    if not writes_enabled():
+        blocked.append("Motor movement is locked. Start the local API with hardware writes enabled.")
+    base = {"moves": preview_moves, "can_execute": not blocked, "blocked_reason": " ".join(blocked) or None}
+    if blocked:
+        return base
+    phrase = "MOVE TOGETHER " + ", ".join(f"{servo_id}:{target}@{speed}" for servo_id, target, speed in moves)
+    pending = PendingGroup(str(uuid4()),
+                           tuple((servo_id, snapshots[servo_id].position, target, speed) for servo_id, target, speed in moves),
+                           phrase, tuple(calibrations[servo_id].model_dump_json() for servo_id in ids),
+                           time.monotonic() + 30)
+    with _group_pending_lock:
+        _group_pending = pending
+    return {**base, "token": pending.token, "phrase": phrase, "expires_in_seconds": 30}
+
+
+def execute_group(token: str, phrase: str, *, off_body: bool, power_cut_tested: bool,
+                  cord_path_clear: bool, calibrations: dict[int, object], stopped: bool,
+                  is_stopped: Callable[[], bool] | None = None) -> dict:
+    global _group_pending
+    with _group_pending_lock:
+        pending = _group_pending
+        _group_pending = None
+    if not pending or pending.token != token or time.monotonic() > pending.expires_at:
+        raise HardwareControlError("Move preview expired. Check the group move again.")
+    if not writes_enabled() or stopped:
+        raise HardwareControlError("Physical movement is disabled or software stop is latched.")
+    if not (off_body and power_cut_tested and cord_path_clear):
+        raise HardwareControlError("Confirm off-body setup, power cutoff, and clear cord paths for this move.")
+    if phrase.strip() != pending.phrase:
+        raise HardwareControlError("Confirmation text did not match. No command was sent.")
+    if tuple(calibrations[servo_id].model_dump_json() for servo_id, _, _, _ in pending.moves) != pending.calibrations:
+        raise HardwareControlError("Calibration changed. Check the group move again.")
+    try:
+        with _driver() as driver:
+            _check_bus_still(driver)
+            for servo_id, start, target, _ in pending.moves:
+                current = read_snapshot(driver, servo_id)
+                validate_snapshot(current, margin=0)
+                if abs(current.position - start) > 10:
+                    raise HardwareControlError(f"Servo {servo_id} changed position since preview. No command was sent.")
+                try:
+                    gated_target_count(current.position, target, calibrations[servo_id],
+                                       ActuationApproval(approved=True,
+                                                         physical_estop_tested_this_session=power_cut_tested), stopped)
+                except PermissionError as exc:
+                    raise HardwareControlError(f"Servo {servo_id}: {exc}") from exc
+            if is_stopped and is_stopped():
+                raise HardwareControlError("Software stop was pressed before the group command. No move was sent.")
+            FeetechServoTransport(driver).write_positions_together(
+                [(servo_id, target, speed) for servo_id, _, target, speed in pending.moves]
+            )
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    return {"accepted": True, "moves": [
+        {"servo_id": servo_id, "target": target, "speed": speed}
+        for servo_id, _, target, speed in pending.moves
+    ], "message": "One synchronized packet sent. Watch every selected servo and use the physical power cutoff if needed."}
+
+
+def move_live(moves: list[tuple[int, int, int]], stopped: bool,
+              is_stopped: Callable[[], bool] | None = None) -> dict:
+    """Send a single goto or one synchronized packet for grouped edits."""
+    ids = [servo_id for servo_id, _, _ in moves]
+    if not 1 <= len(moves) <= 6 or len(set(ids)) != len(ids) or any(
+        servo_id not in range(1, 7) or not 0 <= target <= 4000 or
+        not POSITION_SPEED_MIN <= speed <= POSITION_SPEED_MAX
+        for servo_id, target, speed in moves
+    ):
+        raise HardwareControlError("Choose distinct servos with targets 0–4000 and speeds 50–2400.")
+    if not writes_enabled() or stopped:
+        raise HardwareControlError("Physical movement is disabled or software stop is latched.")
+    try:
+        with _driver(lock_timeout=2.0) as driver:
+            for servo_id, target, _ in moves:
+                snapshot = read_snapshot(driver, servo_id)
+                # A live edit can arrive while the last goal is in progress, so
+                # the stored goal and moving flag are intentionally not a block.
+                if snapshot.model != 777 or snapshot.mode != 0 or snapshot.torque_enabled != 1:
+                    raise HardwareControlError(f"Servo {servo_id} is unavailable for position control.")
+                if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
+                    raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
+                if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
+                    raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
+                if snapshot.position is None:
+                    raise HardwareControlError(f"Servo {servo_id} position is unavailable.")
+            if is_stopped and is_stopped():
+                raise HardwareControlError("Software stop was pressed. No move was sent.")
+            transport = FeetechServoTransport(driver)
+            if len(moves) == 1:
+                # A single target uses the driver's direct goto command.
+                # SyncWrite is reserved for genuinely grouped changes so
+                # multiple servos start together in one broadcast packet.
+                servo_id, target, speed = moves[0]
+                transport.write_position(servo_id, target, speed)
+            else:
+                transport.write_positions_together(moves)
+            final_positions = transport.wait_for_targets(
+                {servo_id: target for servo_id, target, _ in moves}, is_stopped
+            )
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    return {"accepted": True, "moves": [
+        {"servo_id": servo_id, "target": target, "speed": speed}
+        for servo_id, target, speed in moves
+    ], "final_positions": final_positions,
+        "message": "Synchronized targets settled." if len(moves) > 1 else "Position target settled."}
+
+
+def enable_torque(servo_ids: list[int], stopped: bool) -> dict:
+    """Align selected torque-off servos to their present positions, then enable torque."""
+    if not 1 <= len(servo_ids) <= 6 or len(set(servo_ids)) != len(servo_ids) or any(
+        servo_id not in range(1, 7) for servo_id in servo_ids
+    ):
+        raise HardwareControlError("Choose distinct servo IDs from 1 through 6.")
+    if not writes_enabled() or stopped:
+        raise HardwareControlError("Physical control is disabled or software stop is latched.")
+    try:
+        with _driver(lock_timeout=2.0) as driver:
+            snapshots = {}
+            for servo_id in servo_ids:
+                snapshot = read_snapshot(driver, servo_id)
+                if snapshot.model != 777 or snapshot.mode != 0:
+                    raise HardwareControlError(f"Servo {servo_id} is not available in position mode.")
+                if snapshot.moving != 0:
+                    raise HardwareControlError(f"Servo {servo_id} is moving; wait for it to stop before enabling torque.")
+                if snapshot.torque_enabled != 0:
+                    raise HardwareControlError(f"Servo {servo_id} torque is already on or unavailable; no torque changes were made.")
+                if snapshot.position is None or not 0 <= snapshot.position <= 4000 or snapshot.goal_position is None:
+                    raise HardwareControlError(f"Servo {servo_id} has an invalid current or stored position; torque was not enabled.")
+                if snapshot.voltage_v is None or not 6.0 <= snapshot.voltage_v <= 12.6:
+                    raise HardwareControlError(f"Servo {servo_id} voltage is out of range.")
+                if snapshot.temperature_c is None or snapshot.temperature_c >= 50:
+                    raise HardwareControlError(f"Servo {servo_id} is too warm or has no temperature reading.")
+                snapshots[servo_id] = snapshot
+            # A torque-off servo can retain a stale goal count. Replace that goal
+            # with its live position first, preventing torque-on from pulling it
+            # toward an old target. This writes no movement command.
+            aligned_ids = []
+            for servo_id, snapshot in snapshots.items():
+                if snapshot.goal_position != snapshot.position:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        if driver.writeReg(servo_id, 42, snapshot.position) is not True:
+                            raise HardwareControlError(f"Could not align Servo {servo_id}'s stored target; torque was not enabled.")
+                        aligned = driver.readReg(servo_id, 42)
+                    if aligned != snapshot.position:
+                        raise HardwareControlError(f"Servo {servo_id}'s stored target did not verify; torque was not enabled.")
+                    aligned_ids.append(servo_id)
+            for servo_id in servo_ids:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    if driver.writeReg(servo_id, 40, 1) is not True:
+                        raise HardwareControlError(f"Could not enable torque on Servo {servo_id}.")
+                    torque = driver.readReg(servo_id, 40)
+                if torque != 1:
+                    raise HardwareControlError(f"Servo {servo_id} did not confirm torque enabled.")
+    except BenchJogError as exc:
+        raise HardwareControlError(str(exc)) from exc
+    return {"enabled_ids": servo_ids, "aligned_ids": aligned_ids,
+            "message": "Stored targets aligned to current positions; torque enabled for selected servos."}
 
 
 def disable_torque() -> dict:

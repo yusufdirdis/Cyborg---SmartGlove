@@ -41,7 +41,8 @@ def _port() -> tuple[str | None, str | None]:
 def scan_servos() -> dict:
     """Ping and read IDs 1–6 once, then release the serial port."""
     result = {"connected": False, "port": None, "servos": [], "error": None, "checked_at": time.time()}
-    if not _scan_lock.acquire(blocking=False):
+    # Live position reads hold the lock for a few milliseconds at a time, so wait briefly.
+    if not _scan_lock.acquire(timeout=1.0):
         result["error"] = "A status check is already in progress."
         return result
     try:
