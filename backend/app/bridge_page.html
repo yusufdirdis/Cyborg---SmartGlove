@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>handoff · glove bridge</title>
+<style>
+  :root { --bg:#f8f9f8; --card:#fff; --ink:#173126; --muted:#63796a; --line:#e3e9e4; --green:#247658; --green-bg:#e3f7e8;
+          --amber:#976a20; --amber-bg:#fff0d8; --red:#b4533f; --red-bg:#fdece8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1a15; --card:#16241d; --ink:#e3efe7; --muted:#9db3a5; --line:#24382d;
+          --green:#7fd6a8; --green-bg:#173a2a; --amber:#f0c27a; --amber-bg:#3a2e17; --red:#f19a87; --red-bg:#3d1f19; } }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif }
+  main { max-width:720px; margin:0 auto; padding:24px 16px }
+  h1 { font-size:20px; margin:0 0 4px } .sub { color:var(--muted); margin:0 0 20px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; margin-bottom:14px }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between }
+  .pill { display:inline-block; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:700 }
+  .ok { background:var(--green-bg); color:var(--green) } .warn { background:var(--amber-bg); color:var(--amber) } .bad { background:var(--red-bg); color:var(--red) }
+  .code { font:800 44px/1.1 ui-monospace,Consolas,monospace; letter-spacing:.18em; margin:6px 0 }
+  .timer { font:700 26px ui-monospace,Consolas,monospace }
+  button { font:inherit; font-weight:700; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--ink); padding:10px 16px; cursor:pointer }
+  button.primary { background:var(--green); color:#fff; border-color:var(--green) }
+  button.stop { background:#c23b22; color:#fff; border-color:#c23b22; font-size:18px; padding:14px 24px; width:100% }
+  button:disabled { opacity:.5; cursor:default }
+  small, .muted { color:var(--muted) } ul { list-style:none; padding:0; margin:0 } li { padding:4px 0; border-top:1px solid var(--line); font-size:13px }
+  li:first-child { border-top:0 }
+</style>
+</head>
+<body>
+<main>
+  <h1>Glove bridge</h1>
+  <p class="sub">Lets the website at givemeahand.fit move this glove, only while you arm it here. The physical power cutoff is the real emergency stop.</p>
+
+  <div class="card"><button class="stop" onclick="act('stop')">■ STOP the glove</button>
+    <p class="muted" style="margin:8px 0 0">Stops locally and disarms, even if the website is unreachable.</p></div>
+
+  <div class="card">
+    <div class="row"><b>Connections</b><span id="pills"></span></div>
+    <p id="err" class="muted" style="margin:8px 0 0"></p>
+  </div>
+
+  <div class="card">
+    <div class="row"><b>Remote control</b><span id="armpill" class="pill warn">Not armed</span></div>
+    <div id="armed" hidden>
+      <p class="muted" style="margin:12px 0 0">Operator code — give it to the person driving from the website:</p>
+      <div class="code" id="code">······</div>
+      <div class="row"><span class="timer" id="timer">30:00</span>
+        <span><button onclick="act('extend')">+30 min</button> <button onclick="act('disarm')">Disarm</button></span></div>
+    </div>
+    <div id="disarmed">
+      <p class="muted" id="reason" style="margin:12px 0"></p>
+      <button class="primary" id="armbtn" onclick="act('arm')">Arm for 30 minutes</button>
+      <p class="muted" style="margin:10px 0 0"><small>Before arming: glove off-body or supervised, cord path clear, power cutoff tested and within reach.</small></p>
+    </div>
+  </div>
+
+  <div class="card"><b>Recent remote requests</b><ul id="log" style="margin-top:8px"><li class="muted">None yet.</li></ul></div>
+</main>
+<script>
+const CSRF = "{{CSRF}}";
+const $ = id => document.getElementById(id);
+const pill = (ok, text) => `<span class="pill ${ok ? 'ok' : 'bad'}">${text}</span>`;
+async function act(name) {
+  try { const r = await fetch('/' + name, { method: 'POST', headers: { 'X-CSRF-Token': CSRF } });
+        if (!r.ok) alertBox((await r.json().catch(() => ({}))).detail || ('Failed: ' + r.status)); }
+  catch (e) { alertBox(String(e)); }
+  refresh();
+}
+function alertBox(text) { $('err').textContent = text; }
+function clock(seconds) { seconds = Math.max(0, Math.floor(seconds)); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; }
+async function refresh() {
+  try {
+    const s = await (await fetch('/state', { cache: 'no-store' })).json();
+    $('pills').innerHTML = pill(s.connected, s.connected ? 'Website connected' : 'Website offline') + ' ' + pill(s.local_api, s.local_api ? 'Local API ok' : 'Local API offline');
+    $('err').textContent = s.connected ? '' : (s.last_error ? 'Reconnecting… ' + s.last_error : 'Connecting to ' + s.url + '…');
+    $('armed').hidden = !s.armed; $('disarmed').hidden = s.armed;
+    $('armpill').className = 'pill ' + (s.armed ? 'ok' : 'warn'); $('armpill').textContent = s.armed ? 'Armed' : 'Not armed';
+    $('code').textContent = s.code || '······'; $('reason').textContent = s.reason || '';
+    $('armbtn').disabled = !s.local_api;
+    if (s.armed) $('timer').textContent = clock(s.armed_until - s.now);
+    $('log').innerHTML = s.log.length ? s.log.map(e => `<li>${new Date(e.at * 1000).toLocaleTimeString()} · ${e.method} ${e.path} · ${e.status}</li>`).join('') : '<li class="muted">None yet.</li>';
+  } catch (e) { $('err').textContent = 'Bridge not responding: ' + e; }
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>

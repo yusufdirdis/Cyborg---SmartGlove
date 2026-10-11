@@ -115,6 +115,18 @@ Without `--execute`, it only reads the servo and prints the proposed target. The
 
 The API recognizes the tested USB serial adapter (VID:PID `1A86:55D3`) and common Feetech URT-1 adapters (`1A86:7523`). If there are multiple compatible adapters, set `HANDOFF_SERVO_PORT=/dev/cu.YOUR_PORT` before starting the API. The supplied [Feetech-tuna library](https://github.com/iotdesignshop/Feetech-tuna) is included under `backend/feetech_tuna` at commit `50eb1308f9ed490646f39dc58d7ff04c9f4d8eed`, with its [MIT license](backend/third_party_licenses/Feetech-tuna.LICENSE). `pyserial` is installed from `backend/requirements.txt`.
 
+### Online glove control (bridge)
+
+The hosted site can drive the real glove through a bridge running on the laptop the glove is plugged into. The bridge opens an outbound connection, so the laptop needs no open ports.
+
+1. Set the same random `HANDOFF_BRIDGE_TOKEN` on Railway and in the laptop's `backend/.env`.
+2. On the laptop, start the local API with the glove connected, using the same `SUPABASE_DB_URL`, then run `python -m app.bridge` from `backend/`.
+3. Open http://127.0.0.1:8765 on the laptop. Click **Arm for 30 minutes** (or **+30 min** to extend) and give the 6-character **operator code** to the remote user. They enter it on the website banner.
+
+Remote moves are refused unless the bridge is armed and the code matches. Every existing hardware check still runs on the laptop. The code changes on each arm. It stops working after Disarm, Stop, expiry, a lost connection, or 5 wrong tries. The website's Stop and the arm page's Stop both stop and disarm.
+
+Jog, calibration and settings are never available remotely. The physical power cutoff remains the real emergency stop. See `docs/superpowers/specs/2026-10-11-online-hardware-bridge-design.md`.
+
 ## Safety boundary
 
 Saved gestures and vision events remain **simulation only**. Manual Control's raw-count targets can move the hardware when writes are enabled and the user confirms them. The live route checks position mode, torque, voltage, temperature, and Stop before each command. Keep the glove off-body and the independent power cutoff ready when testing physical movement.

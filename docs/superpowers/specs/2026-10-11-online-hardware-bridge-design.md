@@ -1,6 +1,6 @@
 # Online hardware bridge: drive the real glove from givemeahand.fit
 
-**Status:** design reviewed 2026-10-11 (open questions answered in §11). No code yet.
+**Status:** implemented on `feat/onlineHardware` (relay, bridge, arm page, website banner, `tests/test_bridge.py`). The supervised off-body glove test is still to do.
 **Branch:** `feat/onlineHardware`.
 **Date:** 2026-10-11.
 
@@ -121,7 +121,7 @@ Both gates are enforced **on the laptop by the bridge**, so a compromised Railwa
 
 - The laptop API already logs every move through `record_move` (`hardware_moves`, `estop_checks`).
 - Run the laptop API with `HANDOFF_INSTANCE=bridge` (or log `relayed_from=railway`) so remote moves can be told apart.
-- Railway adds a row for each relayed request and its result. It never logs the operator code or the bridge token.
+- The bridge keeps the last 20 relayed requests on the arm page. Railway doesn't log relayed requests, so the laptop API's rows are the record. The operator code and the bridge token are never logged.
 
 ## 9. Test plan
 

@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import assistant
+from .relay import BridgeUnavailable, bridge_token, hub as bridge_hub, relayed
 from .store import RevisionConflict, StoreUnavailable, make_store
 from .vision.api import router as vision_router
 
@@ -201,7 +202,7 @@ class SimulationAdapter:
         self.listeners: set[WebSocket] = set()
 
     def snapshot(self):
-        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "physical": self.physical, "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
+        return {"mode": "simulation", "positions": self.positions, "target": self.target, "stopped": self.stopped, "playing": self.playing, "last_event": self.last_event, "vision": self.vision, "physical": self.physical, "bridge": bridge_hub.public_status(), "devices": {"controller": "Not connected", "glasses": "Not connected", "camera": "Browser preview only"}}
 
     async def broadcast(self):
         message = self.snapshot()
@@ -296,6 +297,7 @@ async def lifespan(_app: FastAPI):
         sim.task.cancel()
 
 
+bridge_hub.on_change = lambda: sim.broadcast()
 app = FastAPI(title="handoff", version="0.1.0", lifespan=lifespan)
 @app.exception_handler(StoreUnavailable)
 async def store_unavailable(_request: Request, exc: StoreUnavailable):
@@ -317,6 +319,31 @@ def cloud_mode() -> bool:
 def allowed_cors_origins() -> list[str]:
     extras = [origin.strip().rstrip("/") for origin in os.environ.get("HANDOFF_CORS_ORIGINS", "").split(",")]
     return list(dict.fromkeys([*LOCAL_CORS_ORIGINS, *(origin for origin in extras if origin and origin != "*")]))
+
+
+@app.middleware("http")
+async def relay_hardware_to_bridge(request: Request, call_next):
+    """Cloud mode: allow-listed hardware requests go to the laptop bridge, which owns every decision."""
+    if not cloud_mode() or not relayed(request.method, request.url.path):
+        return await call_next(request)
+    if not bridge_hub.online:
+        if request.method == "GET":
+            return await call_next(request)  # status/control answer "no hardware" as before
+        return JSONResponse(status_code=403, content={"detail": "The glove is offline. Ask the person at the glove to start the bridge."})
+    body = None
+    if request.method == "POST":
+        raw = await request.body()
+        if raw:
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                return JSONResponse(status_code=422, content={"detail": "Send a JSON body."})
+    try:
+        status_code, payload = await bridge_hub.request(request.method, request.url.path, body,
+                                                        request.headers.get("X-Handoff-Operator", "").strip())
+    except BridgeUnavailable as exc:
+        return JSONResponse(status_code=504, content={"detail": str(exc)})
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @app.middleware("http")
@@ -655,6 +682,8 @@ async def latch_stop() -> dict:
 
     await sim.stop()
     assistant.clear_proposals()
+    if cloud_mode() and bridge_hub.online:
+        asyncio.create_task(bridge_hub.stop())  # the laptop stops and disarms too
     hardware_stop = await asyncio.to_thread(disable_torque)
     return {**sim.snapshot(), "hardware_stop": hardware_stop}
 
@@ -950,6 +979,15 @@ async def test_provider_settings(name: str, request: Request):
     _provider_settings_read(request)
     _settings_provider(name)
     return await assistant.test_provider(name)
+
+
+@app.websocket("/ws/bridge")
+async def bridge_socket(ws: WebSocket):
+    """The laptop bridge connects here (outbound from the laptop). Cloud mode with a bridge token only."""
+    if not cloud_mode() or not bridge_token():
+        await ws.close(code=4404)
+        return
+    await bridge_hub.serve(ws)
 
 
 @app.websocket("/ws/telemetry")
