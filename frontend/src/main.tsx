@@ -85,7 +85,7 @@ function App(){
  <LiveButton macros={macros} setNotice={setNotice}/>
  </div>
 }
-const subtitles:Record<Page,string>={Settings:'Connect AI providers for the assistant. Keys stay on the local server.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Preview a camera feed from your browser.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
+const subtitles:Record<Page,string>={Settings:'Connect AI providers for the assistant. Keys stay on the local server.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Run local object detection and hand tracking from your camera.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[11px] uppercase tracking-[.18em] text-[#7c8f85] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 // 3D model of the real glove, seen from the back of a right hand (thumb on the left). The black cord guides,
@@ -629,29 +629,93 @@ function LivePanel({macros,setNotice,close}:{macros:Macro[],setNotice:(m:string)
   const active=state!=='Ended'&&state!=='Error'
  return <section id="gemini-live-panel" role="dialog" aria-labelledby="gemini-live-title" className="card fixed z-30 bottom-[100px] right-0 sm:right-5 w-full sm:w-[380px] max-h-[calc(100dvh-120px)] flex flex-col p-5"><div className="flex items-start justify-between gap-2"><div><Eyebrow>Voice + camera</Eyebrow><h2 id="gemini-live-title" className="font-bold text-xl mt-1">Gemini Live</h2></div><button ref={closeButton} aria-label="Close Live panel" onClick={close}><X size={20}/></button></div><div className="flex justify-between items-center mt-3"><span role="status"><Pill tone={state==='Live'?'green':state==='Connecting'||state==='Reconnecting'?'amber':'gray'}>{state==='Reconnecting'?'Reconnecting…':state}</Pill></span><span className="text-xs text-[#63796a]" aria-label="Session timer">{liveClock(elapsed)} / {videoSession?'2:00':'15:00'}</span></div><p className="text-xs text-[#839187] mt-3">Moves run in simulation and wait for your Confirm click. Pause holds the conversation; saying “stop” or the page Stop button stops the hand.</p><div className="flex flex-wrap gap-2 mt-3"><button className="btn btn-secondary flex gap-1 items-center" disabled={!active} aria-pressed={muted} onClick={()=>controls.current?.mute()}>{muted?<MicOff size={15}/>:<Mic size={15}/>} {muted?'Unmute':'Mute'}</button><button className="btn btn-secondary flex gap-1 items-center" disabled={!active||cameraBusy} aria-pressed={camera} onClick={()=>void controls.current?.camera()}><Camera size={15}/>{camera?'Camera off':'Camera on'}</button><button className="btn btn-secondary" disabled={!active} onClick={()=>controls.current?.end()}>End</button><button className="btn btn-secondary flex gap-1 items-center" disabled={!active} aria-pressed={paused} onClick={()=>controls.current?.pause()}>{paused?<Play size={15}/>:<Pause size={15}/>} {paused?'Resume':'Pause'}</button></div>{audioBlocked&&active&&<button className="btn btn-secondary mt-2" onClick={()=>controls.current?.resumeAudio()}>Enable audio playback</button>}<div className="overflow-y-auto mini-scroll mt-3 min-h-0"><video ref={video} autoPlay playsInline muted aria-label="Live camera preview" className={`w-full rounded-[16px] bg-[#171d19] mb-3 ${camera?'':'hidden'}`}/>{camera&&<p className="text-xs text-[#839187] mb-3">Camera frames are sent to Gemini once per second.</p>}{error&&<p role="alert" className="message message-error text-xs mb-3">{error}</p>}<div aria-live="polite">{!turns.length&&<p className="text-xs text-[#839187]">Speak to Gemini, or turn on the camera and ask it to mirror a gesture.</p>}{turns.map((t,i)=><div key={i} className="border border-[#e8ece8] rounded-[16px] px-3 py-3 mb-2 text-[13px] leading-5"><div className="text-[10px] uppercase tracking-[.12em] font-extrabold text-[#8d9d90] mb-1">{t.role==='user'?'You':'Gemini Live'}</div><div className="whitespace-pre-wrap">{t.text}</div>{t.proposal&&<ProposalCard turn={t} macros={macros} now={now} {...proposalActions}/>}</div>)}</div><div ref={bottom}/></div></section>
 }
+type VisionConfig={source:'esp32'|'webcam',camera_url:string,webcam_index:number,fallback_to_webcam:boolean,object_detection_enabled:boolean,hand_tracking_enabled:boolean,confidence_threshold:number}
+type VisionRuntime={started:boolean,camera_connected:boolean,camera_state:string,active_source:string|null,camera_notice:string|null,fps:number,frames_processed:number,error:string|null,components:Record<string,string>,config:VisionConfig,detections_count:number}
+type VisionDetection={label:string,class_id:number,confidence:number,box:number[]}
+type VisionHand={gesture:string,confidence:number,handedness:string|null,landmark_count:number,fingers:Record<string,number>}
+type VisionImitation={gesture:string,fingers:Record<string,number>,servo_targets:Record<string,{movement:string,normalized_target:number}>,execution_enabled:boolean,hardware_commands_sent:boolean}
+const emptyVisionConfig:VisionConfig={source:'esp32',camera_url:'http://192.168.4.1:81/stream',webcam_index:0,fallback_to_webcam:false,object_detection_enabled:true,hand_tracking_enabled:true,confidence_threshold:.35}
+const visionSettingsKey='handoffVisionSettings'
+function readVisionSettings():Partial<VisionConfig>{try{return JSON.parse(localStorage.getItem(visionSettingsKey)||'{}')}catch{return {}}}
 function Vision(){
- const video=useRef<HTMLVideoElement>(null)
- const stream=useRef<MediaStream|null>(null)
- const [camera,setCamera]=useState(false)
- const [cameraError,setCameraError]=useState('')
- useEffect(()=>()=>{stream.current?.getTracks().forEach(track=>track.stop())},[])
- const toggle=async()=>{
-  if(stream.current){
-   stream.current.getTracks().forEach(track=>track.stop())
-   stream.current=null
-   if(video.current)video.current.srcObject=null
-   setCamera(false)
-   return
+ const [runtime,setRuntime]=useState<VisionRuntime|null>(null)
+ const [settings,setSettings]=useState<VisionConfig>({...emptyVisionConfig,...readVisionSettings()})
+ const [view,setView]=useState<'default'|'object-detection'>('default')
+ const [busy,setBusy]=useState(false)
+ const [error,setError]=useState('')
+ const [notice,setNotice]=useState('')
+ const [detections,setDetections]=useState<VisionDetection[]>([])
+ const [hand,setHand]=useState<VisionHand|null>(null)
+ const [imitation,setImitation]=useState<VisionImitation|null>(null)
+ const [pollKey,setPollKey]=useState(0)
+ const saveSettings=(next:VisionConfig)=>{setSettings(next);try{localStorage.setItem(visionSettingsKey,JSON.stringify(next))}catch{}}
+ const updateSettings=(patch:Partial<VisionConfig>)=>saveSettings({...settings,...patch})
+ useEffect(()=>{
+  let disposed=false,busyPolling=false
+  const refresh=async()=>{
+   if(busyPolling)return
+   busyPolling=true
+   try{
+    const [status,objects,handResult,imitate]=await Promise.all([
+     api<VisionRuntime>('/vision/status'),api<{detections:VisionDetection[]}>('/vision/detections'),
+     api<{hand:VisionHand|null}>('/vision/hand'),api<VisionImitation>('/vision/imitation'),
+    ])
+    if(disposed)return
+    setRuntime(status);setDetections(objects.detections);setHand(handResult.hand);setImitation(imitate)
+    if(!localStorage.getItem(visionSettingsKey))saveSettings({...emptyVisionConfig,...status.config})
+   }catch(e){if(!disposed)setError(e instanceof Error?e.message:String(e))}
+   finally{busyPolling=false}
   }
-  try{
-   const next=await navigator.mediaDevices.getUserMedia({video:true,audio:false})
-   stream.current=next
-   if(video.current)video.current.srcObject=next
-   setCamera(true)
-   setCameraError('')
-  }catch(error){setCameraError(error instanceof Error?error.message:String(error))}
+  void refresh()
+  const timer=window.setInterval(()=>void refresh(),900)
+  return()=>{disposed=true;window.clearInterval(timer)}
+ },[pollKey])
+ const start=async()=>{
+  setBusy(true);setError('');setNotice('Connecting to the camera and loading local models…')
+  try{const next=await api<VisionRuntime>('/vision/start',{method:'POST',body:json(settings)});setRuntime(next);setNotice('Inference is running in the backend. Both camera views use the same live analysis.');setPollKey(value=>value+1)}
+  catch(e){setError(e instanceof Error?e.message:String(e));setNotice('')}
+  finally{setBusy(false)}
  }
- return <div className="vision-preview"><div className="card p-5 md:p-6"><div className="flex justify-between items-start mb-4"><div><Eyebrow>Camera input</Eyebrow><h2 className="text-xl font-bold mt-1">Live preview</h2></div><Pill tone={camera?'green':'gray'}>{camera?'Browser camera':'Camera off'}</Pill></div><div className="aspect-video rounded-2xl bg-[#172d29] grid place-items-center overflow-hidden relative"><video ref={video} autoPlay playsInline muted className={`w-full h-full object-cover ${camera?'':'hidden'}`}/>{!camera&&<div className="text-center text-[#97b7a9]"><Camera className="mx-auto mb-3" size={36}/><div className="font-bold">No camera preview</div><div className="text-xs mt-1">Connect a browser camera to view its feed</div></div>}<span className="absolute left-4 bottom-4 rounded-full bg-[#152d29]/80 text-white text-[10px] px-3 py-1.5 font-bold">NO OBJECT DETECTOR RUNNING</span></div>{cameraError&&<p className="text-red-600 text-xs mt-2">{cameraError}</p>}<button className="btn btn-primary mt-4" onClick={toggle}>{camera?'Stop preview':'Start camera preview'}</button><p className="text-xs text-[#849087] mt-3">Camera video stays in this browser. The preview does not analyze frames or identify objects.</p></div></div>
+ const stop=async()=>{
+  setBusy(true);setError('');setNotice('')
+  try{const next=await api<VisionRuntime>('/vision/stop',{method:'POST'});setRuntime(next);setNotice('Camera inference stopped.')}
+  catch(e){setError(e instanceof Error?e.message:String(e))}
+  finally{setBusy(false)}
+ }
+ const connected=!!runtime?.camera_connected
+ const streamUrl=connected?`/api/vision/stream.mjpg?view=${view}`:undefined
+ const serverError=runtime?.error
+ const componentStatus=(name:string)=>runtime?.components[name]??'waiting'
+ const fingerLabels:Record<string,string>={index:'Index',middle:'Middle',ring:'Ring',pinky:'Pinky',thumb_bend:'Thumb bend',thumb_opposition:'Thumb opposition'}
+ const servoLabels:Record<string,string>={'1':'Pinky','2':'Ring','3':'Middle','4':'Index','5':'Thumb bend','6':'Thumb opposition'}
+ return <div className="vision-workspace">
+  <section className="card vision-controls p-5 md:p-6">
+   <div className="flex flex-wrap justify-between items-start gap-3 mb-5"><div><Eyebrow>Local camera inference</Eyebrow><h2 className="text-xl font-bold mt-1">Camera and models</h2><p className="text-xs text-[#839187] mt-2">YOLO and hand tracking run on the backend while either camera view is selected.</p></div><Pill tone={connected?'green':runtime?.started?'amber':'gray'}>{connected?`Connected · ${runtime?.active_source}`:runtime?.camera_state??'Checking runtime'}</Pill></div>
+   <div className="vision-settings-grid">
+    <label className="vision-field">Camera source<select className="field" value={settings.source} onChange={e=>updateSettings({source:e.target.value as VisionConfig['source']})}><option value="esp32">ESP32 camera stream</option><option value="webcam">Local webcam</option></select></label>
+    {settings.source==='esp32'?<label className="vision-field vision-url">ESP32 stream URL<input className="field" value={settings.camera_url} spellCheck={false} placeholder="http://192.168.4.1:81/stream" onChange={e=>updateSettings({camera_url:e.target.value})}/></label>:<label className="vision-field">Webcam index<input className="field" type="number" min="0" max="20" value={settings.webcam_index} onChange={e=>updateSettings({webcam_index:Number(e.target.value)})}/></label>}
+    <label className="vision-check"><input type="checkbox" checked={settings.object_detection_enabled} onChange={e=>updateSettings({object_detection_enabled:e.target.checked})}/> Run object detection</label>
+    <label className="vision-check"><input type="checkbox" checked={settings.hand_tracking_enabled} onChange={e=>updateSettings({hand_tracking_enabled:e.target.checked})}/> Track hand and gestures</label>
+    {settings.source==='esp32'&&<label className="vision-check"><input type="checkbox" checked={settings.fallback_to_webcam} onChange={e=>updateSettings({fallback_to_webcam:e.target.checked})}/> Use webcam if ESP32 is unavailable</label>}
+    <label className="vision-field vision-confidence">Object confidence <span>{settings.confidence_threshold.toFixed(2)}</span><input type="range" min="0.05" max="0.95" step="0.05" value={settings.confidence_threshold} onChange={e=>updateSettings({confidence_threshold:Number(e.target.value)})}/></label>
+   </div>
+   <div className="vision-actions"><button className="btn btn-primary" disabled={busy} onClick={()=>void start()}>{busy?'Working…':runtime?.started?'Restart inference':'Start inference'}</button><button className="btn btn-secondary" disabled={busy||!runtime?.started} onClick={()=>void stop()}>Stop inference</button><span className="vision-component-status">YOLO {componentStatus('object_detection')} · Hands {componentStatus('hand_tracking')}</span></div>
+   {error&&<p role="alert" className="message message-error mt-4 mb-0">{error}</p>}{serverError&&<p role="status" className="vision-runtime-error">{serverError}</p>}{runtime?.camera_notice&&<p role="status" className="vision-runtime-notice">{runtime.camera_notice}</p>}{notice&&!error&&<p role="status" className="vision-runtime-notice">{notice}</p>}
+  </section>
+  <div className="vision-live-grid">
+   <section className="card vision-camera-card p-5 md:p-6">
+    <div className="vision-camera-heading"><div><Eyebrow>Live stream</Eyebrow><h2 className="text-xl font-bold mt-1">{view==='default'?'Default view':'Object detection view'}</h2></div><div className="vision-view-switch" role="group" aria-label="Camera display mode"><button type="button" aria-pressed={view==='default'} className={view==='default'?'selected':''} onClick={()=>setView('default')}>Default view</button><button type="button" aria-pressed={view==='object-detection'} className={view==='object-detection'?'selected':''} onClick={()=>setView('object-detection')}>Object detection view</button></div></div>
+    <div className="vision-stream" aria-live="polite">{connected&&streamUrl?<img key={view} src={streamUrl} alt={view==='default'?'Raw camera view; analysis continues in the backend':'Camera view with object boxes and hand landmarks'}/>:<div className="vision-stream-empty"><Camera size={38}/><b>{runtime?.started?'Connecting to camera…':'Start inference to show the camera'}</b><span>{runtime?.started?serverError??'The backend is opening the selected camera stream.':'Inference will continue in the backend while either view is selected.'}</span></div>}</div>
+    <div className="vision-inference-note"><span className={`status-dot ${runtime?.started?'online':''}`}/><span>Backend inference stays active in both views. The object detection view adds boxes and hand landmarks to the camera feed.</span></div>
+    <div className="vision-stats"><div><small>Source</small><b>{runtime?.active_source??'—'}</b></div><div><small>Camera</small><b>{runtime?.camera_state??'stopped'}</b></div><div><small>FPS</small><b>{runtime?.fps?.toFixed(1)??'0.0'}</b></div><div><small>Frames analyzed</small><b>{runtime?.frames_processed??0}</b></div><div><small>Objects</small><b>{runtime?.detections_count??detections.length}</b></div></div>
+   </section>
+   <div className="vision-results">
+    <section className="card p-5"><div className="flex items-center justify-between gap-3 mb-3"><h2 className="text-lg font-bold m-0">Detected objects</h2><Pill>{detections.length}</Pill></div>{detections.length?<div className="vision-detection-list">{detections.slice(0,12).map((item,index)=><div className="vision-detection" key={`${item.class_id}-${index}`}><b>{item.label}</b><span>{(item.confidence*100).toFixed(1)}%</span><small>[{item.box.map(Math.round).join(', ')}]</small></div>)}</div>:<p className="text-xs text-[#839187] mb-0">{connected?'No objects detected in the latest frame.':'Object detections will appear here when inference starts.'}</p>}</section>
+    <section className="card p-5"><div className="flex items-center justify-between gap-3"><h2 className="text-lg font-bold m-0">Hand and gesture</h2><Pill tone={hand?'green':'gray'}>{hand?.gesture??'No hand'}</Pill></div><p className="text-xs text-[#839187] mt-2">{hand?`${hand.landmark_count} landmarks · ${hand.handedness??'Hand'} · confidence ${hand.confidence.toFixed(2)}`:'Hand tracking results will appear here.'}</p><div className="vision-value-grid">{Object.entries(fingerLabels).map(([key,label])=>{const value=imitation?.fingers?.[key]??0;return <div className="vision-value" key={key}><div><span>{label}</span><b>{value.toFixed(2)}</b></div><i><em style={{width:`${Math.round(value*100)}%`}}/></i></div>})}</div></section>
+    <section className="card p-5"><div className="flex items-center justify-between gap-3 mb-1"><h2 className="text-lg font-bold m-0">Gesture imitation</h2><Pill tone="amber">Simulation only</Pill></div><p className="text-xs text-[#839187] mt-2">Normalized targets update from the hand estimate. No hardware commands are sent.</p><div className="vision-value-grid vision-servo-grid">{Object.entries(servoLabels).map(([id,label])=>{const value=imitation?.servo_targets?.[id]?.normalized_target??0;return <div className="vision-value" key={id}><div><span>{label}</span><b>{value.toFixed(2)}</b></div><i><em style={{width:`${Math.round(value*100)}%`}}/></i></div>})}</div><span className="sr-only">Execution {imitation?.execution_enabled?'enabled':'disabled'}; hardware commands {imitation?.hardware_commands_sent?'sent':'not sent'}.</span></section>
+   </div>
+  </div>
+ </div>
 }
 function Devices({status,hardware,scan}:{status:Status,hardware:HardwareStatus|null,scan:()=>Promise<void>}){
  const controllerState=hardware?.connected?'Connected':hardware?.port?(hardware.servos.length?`${hardware.servos.length}/6 responding`:'USB detected'):'Not connected'
