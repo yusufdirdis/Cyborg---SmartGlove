@@ -91,6 +91,18 @@ Before sending a motor command, keep the glove off-body, confirm the cord path i
 
 The **Stop** control latches software control. When physical writes are enabled, it also attempts to switch off torque on all six servos. This is a best-effort software action; use the independent physical power cutoff if the glove moves unexpectedly. Resetting the software stop does not re-enable torque. The API and frontend must remain bound to localhost because this prototype has no user login.
 
+### LCD display
+
+A 16x2 I2C LCD on a separate ESP32 mirrors the torque readiness state: settle count, ready, aligning, torque on, and clear no-data or error states. The board's RGB LED mirrors the same colours. It is display-only: the API writes one line per state over the ESP's USB serial port (see [`docs/lcd-display/PROTOCOL.md`](docs/lcd-display/PROTOCOL.md)), and the bridge never scans servos, opens the servo port, or sends a motor command. The screen shows the newest `/api/hardware/status` reading, so keep the website open. It switches to `GLOVE UNKNOWN` after 45 seconds without a reading, and to `NO DATA FROM APP` after 5 seconds without a message.
+
+Set `HANDOFF_LCD_PORT` to the ESP's serial port when starting the API. The bridge is off when it is unset:
+
+```bash
+HANDOFF_LCD_PORT=/dev/cu.YOUR_ESP_PORT .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Parts, wiring (including the ESP32-S3 / HW678), flashing, and the display spec are in [`docs/lcd-display/WIRING.md`](docs/lcd-display/WIRING.md) and [`docs/lcd-display/SPEC.md`](docs/lcd-display/SPEC.md). If the ESP and the servo controller use the same USB adapter type, also set `HANDOFF_SERVO_PORT`.
+
 ### Bench preflight
 
 The separate `backend/app/bench_jog.py` terminal tool provides a read-only preflight for one servo at a time. Stop the API first so it releases the USB controller, then run from `backend`:
