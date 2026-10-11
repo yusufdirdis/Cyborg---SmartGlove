@@ -139,3 +139,9 @@
 .servo-missing{grid-column:3/-1;color:#63796a;font-size:12px}
 @media(max-width:760px){.servo-row{grid-template-columns:40px minmax(0,1fr) auto;row-gap:6px}.servo-head{display:none}.servo-row>span:nth-child(n+4){grid-column:2/-1;text-align:left;align-items:flex-start}.servo-pos{align-items:flex-start}}
 
+/* — handoff UI/UX redesign: Macro Studio with the assistant — */
+.studio-split{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:20px;align-items:start}
+.studio-left,.studio-right{min-width:0}
+.studio-right .space-y-5{max-width:none}
+@media(max-width:1199px){.studio-split{grid-template-columns:1fr}}
+

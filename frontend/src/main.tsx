@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {Anchor, ArrowUpRight, Camera, Check, Cpu, Eraser, Hand, LayoutDashboard, Menu, MessageSquare, Mic, MicOff, Pause, Pencil, PhoneOff, Play, PlugZap, Plus, RefreshCw, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, Volume2, X, type LucideIcon} from 'lucide-react'
+import {Anchor, ArrowUpRight, Camera, Check, Cpu, Eraser, Hand, LayoutDashboard, Menu, Mic, MicOff, Pause, Pencil, PhoneOff, Play, PlugZap, Plus, RefreshCw, RotateCcw, Save, SendHorizontal, Settings, SlidersHorizontal, Sparkles, Square, Trash2, Undo2, Volume2, X, type LucideIcon} from 'lucide-react'
 import {Canvas, useFrame, useThree} from '@react-three/fiber'
 import * as THREE from 'three'
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js'
@@ -55,7 +55,7 @@ function App(){
  const play=async(m:Macro)=>{await action(()=>api(`/macros/${m.id}/play`,{method:'POST'}),`Playing ${m.name} in simulation`)}
  const stop=async()=>{const result=await action(()=>api<Status & {hardware_stop?:HardwareStop}>('/control/stop',{method:'POST'}));if(result){cancelPendingProposals();setNotice(stopNotice(result))}}
  const reset=()=>action(()=>api<Status>('/control/reset',{method:'POST'}),'Simulation resumed')
- const nav:[Page,LucideIcon,string][]=[['Dashboard',LayoutDashboard,'overview'],['Macro Studio',Hand,'macro'],['Manual Control',SlidersHorizontal,'manual'],['AI Vision',Camera,'vision'],['AI Assistant',MessageSquare,'assistant'],['Settings',Settings,'settings']]
+ const nav:[Page,LucideIcon,string][]=[['Dashboard',LayoutDashboard,'overview'],['Macro Studio',Hand,'macro'],['Manual Control',SlidersHorizontal,'manual'],['AI Vision',Camera,'vision'],['Settings',Settings,'settings']]
  const navigate=(next:Page)=>{setPage(next);setMenuOpen(false);setNotice('');window.scrollTo({top:0,behavior:'smooth'})}
  return <div className="app-layout">
   <aside className={`app-sidebar ${menuOpen?'open':''}`}>
@@ -73,16 +73,15 @@ function App(){
     {status.stopped&&<div className="stop-message"><Pause size={20}/><div><b>Software stop is latched.</b> Simulation is halted. If hardware control was enabled, servo torque-off was attempted; use the physical power cutoff if the glove moves.</div></div>}
     {page==='Dashboard'&&<Dashboard status={status} hardware={hardware} macros={macros} play={play} go={navigate}/>}
     {page==='Manual Control'&&<Manual status={status} hardware={hardware} onReading={setHardware}/>}
-    {page==='Macro Studio'&&<MacroStudio macros={macros} status={status} cal={cal} refresh={refresh} action={action} play={play} manual={Object.fromEntries(allServoIds.map(id=>[id,hardware?.servos.find(servo=>servo.id===id)?.position??(status.positions[id]??0)*40]))}/>}
+    {page==='Macro Studio'&&<div className="studio-split"><div className="studio-left"><MacroStudio macros={macros} status={status} cal={cal} refresh={refresh} action={action} play={play} manual={Object.fromEntries(allServoIds.map(id=>[id,hardware?.servos.find(servo=>servo.id===id)?.position??(status.positions[id]??0)*40]))}/></div><div className="studio-right"><Assistant macros={macros} action={action} setNotice={setNotice} setError={setError}/></div></div>}
     {page==='AI Vision'&&<Vision/>}
-    {page==='AI Assistant'&&<Assistant macros={macros} action={action} setNotice={setNotice} setError={setError}/>}
     {page==='Settings'&&<div className="settings-stack"><h2 className="settings-section-title">Devices</h2><Devices status={status} hardware={hardware} scan={scanHardware}/><h2 className="settings-section-title">Gemini</h2><SettingsPage action={action}/></div>}
    </main>
   </div>
  <LiveButton macros={macros} setNotice={setNotice}/>
  </div>
 }
-const subtitles:Record<Page,string>={Settings:'Connected devices and your Gemini API key. The key stays on this computer.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Create, edit, and play gestures and movement sequences.', 'AI Vision':'Run local object detection and hand tracking from your camera.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
+const subtitles:Record<Page,string>={Settings:'Connected devices and your Gemini API key. The key stays on this computer.',Dashboard:'A clear view of your hand, gestures, and connected systems.', 'Manual Control':'Stage and confirm physical servo targets.', 'Macro Studio':'Build gestures by hand, or ask Gemini to draft them. Nothing moves until you click Confirm.', 'AI Vision':'Run local object detection and hand tracking from your camera.','AI Assistant':'Ask by text or voice; every movement waits for your Confirm and runs in simulation.',Devices:'See connected devices and live servo status.'}
 function Eyebrow({children}:{children:React.ReactNode}){return <div className="text-[10px] uppercase tracking-[.13em] text-[#63796a] font-extrabold">{children}</div>}
 function Pill({children,tone='green'}:{children:React.ReactNode,tone?:'green'|'gray'|'amber'}){return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${tone==='green'?'bg-[#e3f7e8] text-[#247658]':tone==='amber'?'bg-[#fff0d8] text-[#976a20]':'bg-[#edf0ed] text-[#708079]'}`}>{children}</span>}
 // 3D model of the real glove, seen from the back of a right hand (thumb on the left). The black cord guides,
@@ -556,7 +555,7 @@ function Assistant({macros,action,setNotice,setError}:{macros:Macro[],action:Man
   <div className="card p-5">
    <div className="flex flex-wrap items-center justify-between gap-3"><div><Eyebrow>Gemini assistant</Eyebrow><h2 className="text-lg font-bold mt-1">Ask Gemini</h2></div><div className="text-right"><Pill tone={current?.available?'green':'gray'}>{current?.available?'Gemini ready':'Gemini key needed'}</Pill>{current?.model&&<div className="text-xs text-[#63796a] mt-2">{current.model}</div>}</div></div>
    {!current?.available&&<p className="text-xs text-[#63796a] mt-3">Add a Gemini API key in Settings to enable the assistant.</p>}
-   <p className="text-xs text-[#63796a] mt-3">Gemini only proposes simulated moves. It cannot drive the Devices hardware test. Say or type “stop” to stop immediately.</p>
+   <p className="text-xs text-[#63796a] mt-3">Gemini only proposes simulated moves. It cannot run Test on glove. Say or type “stop” to stop immediately.</p>
   </div>
   <div className="card p-5">
    <div className="min-h-[160px] max-h-[460px] overflow-y-auto mini-scroll" aria-live="polite">
