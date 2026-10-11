@@ -257,9 +257,14 @@ async def lifespan(_app: FastAPI):
     from .live_positions import enabled as live_positions_enabled
     from .vision.service import vision_service
 
+    from . import lcd_bridge
+
     init_db()
     poller = asyncio.create_task(poll_physical_positions()) if live_positions_enabled() else None
+    lcd = asyncio.create_task(lcd_bridge.run(lambda: sim.stopped)) if lcd_bridge.enabled() else None
     yield
+    if lcd:
+        lcd.cancel()
     vision_service.stop()
     if poller:
         poller.cancel()
@@ -284,9 +289,12 @@ def servos():
 
 @app.get("/api/hardware/status")
 def hardware_status():
+    from . import lcd_bridge
     from .servo_status import scan_servos
 
-    return scan_servos()
+    reading = scan_servos()
+    lcd_bridge.record_reading(reading)
+    return reading
 
 
 class JogPreviewInput(BaseModel):
@@ -494,11 +502,20 @@ def move_hardware_live(payload: LiveMoveInput, request: Request):
 def enable_hardware_torque(payload: TorqueEnableInput, request: Request):
     from .hardware_control import HardwareControlError, enable_torque
 
+    from . import lcd_bridge
+
     _local_hardware_request(request)
+    lcd_bridge.torque_started()
     try:
-        return enable_torque(payload.servo_ids, sim.stopped)
+        result = enable_torque(payload.servo_ids, sim.stopped)
     except HardwareControlError as exc:
+        lcd_bridge.torque_finished(str(exc))
         raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        lcd_bridge.torque_finished(str(exc))
+        raise
+    lcd_bridge.torque_finished()
+    return result
 
 
 @app.get("/api/macros")
