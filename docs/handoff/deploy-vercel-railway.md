@@ -12,7 +12,7 @@ Read this whole file before changing anything. Then read `CLAUDE.md` and `README
 
 | Part | Today | Target |
 |---|---|---|
-| Frontend | `frontend/`: React 19 + TS + Tailwind 3 + Vite 6. The whole UI is in `frontend/src/main.tsx`, written as dense one-liners (keep that style). | **Vercel** static build (`npm run build` → `dist/`). |
+| Frontend | `frontend/`: React 19 + TS + Tailwind 4 + Vite 6. The whole UI is in `frontend/src/main.tsx`, written as dense one-liners (keep that style). | **Vercel** static build (`npm run build` → `dist/`). |
 | Backend | `backend/`: FastAPI. A single long-lived process holds the simulation, the proposals and the WebSocket telemetry **in memory**. | **Railway**, one always-on service, **exactly 1 replica**. |
 | Database | Supabase Postgres, `handoff` schema inside the owner's existing "ResumeFit" project (ref `bxjdarssqxsgequahzzg`, region us-west-1). The backend connects as role `handoff_app` through the session pooler. | Unchanged. Railway uses the same `SUPABASE_DB_URL`. |
 | Glove hardware | USB servos on the owner's laptop only. | **Not reachable from the cloud.** The laptop keeps running its own local API for hardware tests. |
@@ -86,21 +86,9 @@ Keep the changes small, in the existing style, and add tests. Do **not** weaken 
   - Allowed origins come from the env var.
 
 ### 3.4 Railway service config
-Add `backend/railway.json`:
+Railway deprecated `railway.json` / `railway.toml` and does not allow new services to use them. Use the root `.railway/railway.ts` Infrastructure as Code file instead, with the `railway` SDK installed at the repository root. It should declare the GitHub source (`yusufdirdis/handoff---SmartGlove`, branch `feat/deploy`, root `backend`), the Uvicorn start command, `/api/health`, one replica, and the non-secret Railway variables. Keep secrets as Railway-managed values; do not inline them in the IaC file.
 
-```json
-{
-  "$schema": "https://railway.com/railway.schema.json",
-  "deploy": {
-    "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'",
-    "healthcheckPath": "/api/health",
-    "numReplicas": 1,
-    "restartPolicyType": "ON_FAILURE"
-  }
-}
-```
-
-Also add `backend/.python-version` containing `3.12` so the builder picks a known Python. Check the current Railway docs for the config-file schema before relying on field names.
+Disable Uvicorn proxy-header trust. `_local_hardware_request()` checks the connection IP, so trusting client-supplied forwarded IP headers could bypass its local-only guard. Also add `backend/.python-version` containing `3.12` so the builder picks a known Python.
 
 ### 3.5 Docs
 - Add a "Deploy (Vercel + Railway)" section to `README.md`: the env-var tables below, plus the warning that the cloud has no hardware.
@@ -114,10 +102,14 @@ Also add `backend/.python-version` containing `3.12` so the builder picks a know
 npm i -g @railway/cli          # or the official installer
 railway login
 railway init                   # new project, for example "handoff"
-# Create one service from the GitHub repo, branch feat/deploy (or main after merge), root directory: backend
+railway add --service handoff-api
+# Add the project configuration in .railway/railway.ts and install the root SDK dependency.
+npm install
+railway config plan
+railway config apply
 ```
 
-Set the service variables in the dashboard, or with `railway variables --set "KEY=value"`:
+Set the service variables in the dashboard, or with `railway variable set` (use `--stdin` for secret values):
 
 | Variable | Value |
 |---|---|

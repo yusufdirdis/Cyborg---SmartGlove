@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -303,7 +304,41 @@ async def revision_conflict(_request: Request, exc: RevisionConflict):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
-app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+LOCAL_CORS_ORIGINS = ["http://127.0.0.1:5173", "http://localhost:5173"]
+
+
+def cloud_mode() -> bool:
+    return os.environ.get("HANDOFF_CLOUD", "").strip() == "1"
+
+
+def allowed_cors_origins() -> list[str]:
+    extras = [origin.strip().rstrip("/") for origin in os.environ.get("HANDOFF_CORS_ORIGINS", "").split(",")]
+    return list(dict.fromkeys([*LOCAL_CORS_ORIGINS, *(origin for origin in extras if origin and origin != "*")]))
+
+
+app.add_middleware(CORSMiddleware, allow_origins=allowed_cors_origins(), allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def require_demo_passcode(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or not path.startswith("/api/") or path == "/api/health":
+        return await call_next(request)
+    expected = os.environ.get("HANDOFF_PASSCODE", "")
+    if cloud_mode() and not expected:
+        return JSONResponse(status_code=503, content={"detail": "Demo access is not configured"})
+    if not expected:
+        return await call_next(request)
+    supplied = request.headers.get("X-Handoff-Passcode", "")
+    if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        return JSONResponse(status_code=401, content={"detail": "Passcode required"})
+    request.state.handoff_passcode_authenticated = True
+    return await call_next(request)
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
 
 
 @app.get("/api/status")
@@ -318,6 +353,8 @@ def servos():
 
 @app.get("/api/hardware/status")
 def hardware_status():
+    if cloud_mode():
+        return {"connected": False, "port": None, "servos": [], "error": "Hardware is only available on the local API.", "checked_at": time.time()}
     from .servo_status import scan_servos
 
     global _device_session
@@ -740,7 +777,7 @@ class LiveProposalInput(BaseModel):
 @app.post("/api/assistant/live/session")
 async def assistant_live_session(request: Request):
     """Hands the browser a single-use ephemeral token. The prompt and tools stay server-side."""
-    _local_settings_request(request)
+    _local_or_cloud_live_request(request)
     saved = [{"id": m["id"], "name": m["name"]} for m in macros()]
     try:
         created = await asyncio.wait_for(asyncio.to_thread(assistant.create_live_token, SERVO_NAMES, saved), assistant.PROVIDER_TIMEOUT_S + 2)
@@ -756,7 +793,7 @@ async def assistant_live_session(request: Request):
 @app.post("/api/assistant/live/proposal")
 async def assistant_live_proposal(payload: LiveProposalInput, request: Request):
     """Turns a Live tool call into the same single-use proposal as chat. It never moves anything."""
-    _local_settings_request(request)
+    _local_or_cloud_live_request(request)
     if sim.stopped and payload.action != "save_macro":
         raise HTTPException(409, "Software stop is latched")
     saved = [{"id": m["id"], "name": m["name"], "steps": len(m["steps"])} for m in macros()]
@@ -849,6 +886,18 @@ def _local_settings_request(request: Request) -> None:
         raise HTTPException(403, SETTINGS_LOCAL_ONLY)
 
 
+def _provider_settings_request(request: Request) -> None:
+    if cloud_mode():
+        raise HTTPException(403, "Provider keys are managed in Railway variables")
+    _local_settings_request(request)
+
+
+def _local_or_cloud_live_request(request: Request) -> None:
+    if cloud_mode() and getattr(request.state, "handoff_passcode_authenticated", False):
+        return
+    _local_settings_request(request)
+
+
 def _settings_provider(name: str) -> None:
     if name not in assistant.CONFIGURABLE:
         raise HTTPException(404, "Unknown configurable provider")
@@ -856,13 +905,13 @@ def _settings_provider(name: str) -> None:
 
 @app.get("/api/settings/providers")
 def provider_settings(request: Request):
-    _local_settings_request(request)
+    _provider_settings_request(request)
     return assistant.settings_list()
 
 
 @app.put("/api/settings/providers/{name}")
 def update_provider_settings(name: str, payload: ProviderSettingsInput, request: Request):
-    _local_settings_request(request)
+    _provider_settings_request(request)
     _settings_provider(name)
     assistant.update_settings(name, payload.api_key, payload.model)
     return next(p for p in assistant.settings_list() if p["name"] == name)
@@ -870,7 +919,7 @@ def update_provider_settings(name: str, payload: ProviderSettingsInput, request:
 
 @app.delete("/api/settings/providers/{name}/key")
 def clear_provider_key(name: str, request: Request):
-    _local_settings_request(request)
+    _provider_settings_request(request)
     _settings_provider(name)
     assistant.clear_key(name)
     return next(p for p in assistant.settings_list() if p["name"] == name)
@@ -878,13 +927,18 @@ def clear_provider_key(name: str, request: Request):
 
 @app.post("/api/settings/providers/{name}/test")
 async def test_provider_settings(name: str, request: Request):
-    _local_settings_request(request)
+    _provider_settings_request(request)
     _settings_provider(name)
     return await assistant.test_provider(name)
 
 
 @app.websocket("/ws/telemetry")
 async def telemetry(ws: WebSocket):
+    expected = os.environ.get("HANDOFF_PASSCODE", "")
+    supplied = ws.query_params.get("passcode", "")
+    if (cloud_mode() and not expected) or (expected and not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     sim.listeners.add(ws)
     await ws.send_json(sim.snapshot())

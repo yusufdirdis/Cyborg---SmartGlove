@@ -95,7 +95,7 @@ Physical writes are **off by default**. The local API must be started with `HAND
 
 When those conditions have been met and the assembled glove's movement has been reviewed, restart the API from `backend/` with `HANDOFF_ENABLE_HARDWARE_WRITES=1 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000`. Omit the flag to lock physical writes again. Do not enable this mode for an unmeasured setup.
 
-The **Stop** control latches software control. When physical writes are enabled, it also attempts to switch off torque on all six servos. This is a best-effort software action; use the independent physical power cutoff if the glove moves unexpectedly. Resetting the software stop does not re-enable torque. The API and frontend must remain bound to localhost because this prototype has no user login.
+The **Stop** control latches software control. When physical writes are enabled, it also attempts to switch off torque on all six servos. This is a best-effort software action; use the independent physical power cutoff if the glove moves unexpectedly. Resetting the software stop does not re-enable torque. Keep the local API and frontend bound to localhost. The cloud demo uses a shared passcode, not user accounts, and never exposes physical hardware.
 
 ### Bench preflight
 
@@ -115,6 +115,37 @@ Saved gestures and vision events remain **simulation only**. Manual Control's ra
 
 The physical power cutoff must interrupt servo power independently of handoff. Test it with the glove off the body before any wearable trial. A software stop cannot substitute for a power cut. Two supplied Feetech/ST3215 scripts are saved in [`hardware/reference`](hardware/reference/README.md) for review. Their broad movement commands are not exposed by the website.
 
+## Deploy (Vercel + Railway)
+
+The cloud demo runs the static React app on Vercel and one FastAPI process on Railway. Railway uses the existing Supabase `handoff` schema; no schema migration is part of deployment. Connect each service to the `feat/deploy` branch after it is pushed, using `frontend/` and `backend/` as their respective root directories.
+
+### Railway API
+
+The Railway project is described by [`.railway/railway.ts`](.railway/railway.ts), using Railway's Infrastructure as Code CLI. It connects `feat/deploy` with `backend/` as the source root, starts Uvicorn on Railway's `$PORT`, checks `/api/health`, and fixes the service at one replica because simulation and WebSocket state are in memory. The command disables proxy-header trust so forwarded client IP headers cannot bypass local-only hardware guards. Install the root Railway SDK before running `railway config plan` or `railway config apply`. Configure these variables in Railway:
+
+| Variable | Value |
+|---|---|
+| `SUPABASE_DB_URL` | Owner-provided `handoff_app` session-pooler URL; keep it secret. |
+| `HANDOFF_INSTANCE` | `railway` |
+| `HANDOFF_CLOUD` | `1` |
+| `HANDOFF_PASSCODE` | Owner-provided demo passcode, at least 12 characters. |
+| `HANDOFF_CORS_ORIGINS` | Comma-separated Vercel production origin and any required preview origins. |
+| `HANDOFF_LIVE_POSITIONS` | `0` |
+| `GEMINI_API_KEY` | Optional server-side provider key; Gemini Live requires it. |
+| `GEMINI_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `HF_TOKEN`, `HF_MODEL` | Optional server-side provider configuration. |
+
+Never set `HANDOFF_ENABLE_HARDWARE_WRITES` on Railway. The cloud API reports hardware unavailable and does not scan serial devices; local-only hardware routes remain guarded. Provider settings return 403 in cloud mode, so keys must be managed as Railway variables. `/api/health` is public for Railway's health check; other API requests require the demo passcode, and the telemetry WebSocket uses the same passcode.
+
+### Vercel frontend
+
+Set the Vercel project root directory to `frontend/`, the framework to Vite if it is not auto-detected, the build command to `npm run build`, and the output directory to `dist`. Add `VITE_API_URL` to the production and preview environments with the Railway API origin and no trailing slash. Redeploy Vercel after changing it. No database URL, provider key, or passcode belongs in Vercel variables; the browser asks for the passcode and sends it directly to Railway.
+
+| Vercel variable | Value |
+|---|---|
+| `VITE_API_URL` | Railway API origin, with no trailing slash. |
+
+Deploy Railway first to get its API origin, then deploy Vercel. After Vercel assigns the production URL, add that origin to Railway's `HANDOFF_CORS_ORIGINS` and redeploy the API. The demo passcode is a shared access gate, not user authentication. Cloud simulation has no USB or physical glove access; physical controls must be run through the owner's local API. The Railway service is always on and may incur hosting charges.
+
 ## Checks
 
 ```bash
@@ -122,7 +153,7 @@ cd backend && .venv/bin/python -m pytest -q
 cd ../frontend && npm run build
 ```
 
-The backend tests use a fake serial driver and send no USB writes. The frontend's current Tailwind 3 build dependencies have seven npm audit advisories (five high, two moderate), all in build tooling. Keep this development server bound to localhost and upgrade the build toolchain before any public deployment.
+The backend tests use a fake serial driver and send no USB writes. The frontend uses Tailwind 4's Vite plugin, and `npm audit` reports no known vulnerabilities. Keep the development server bound to localhost.
 
 ## Integration next steps
 
