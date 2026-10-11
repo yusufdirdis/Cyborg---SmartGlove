@@ -24,9 +24,9 @@
 .macro-actions button{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;min-width:32px;padding:0;border:1px solid #dfe5da;border-radius:16px;background:#fff;color:#35523c;font-size:12px;font-weight:800;line-height:1;white-space:nowrap;transition:background-color .15s,color .15s,border-color .15s}
 .macro-actions button:hover{background:#f2f5f0}
 .macro-actions button:disabled{opacity:.5;cursor:not-allowed}
-.macro-actions .macro-play{padding:0 14px 0 11px;min-width:72px;background:#1a4034;border-color:#1a4034;color:#fff}
-.macro-actions .macro-play:hover{background:#2d684b}
-.macro-actions .macro-test{padding:0 13px 0 10px}
+.macro-actions .macro-test{padding:0 14px 0 11px;min-width:72px;background:#1a4034;border-color:#1a4034;color:#fff}
+.macro-actions .macro-test:hover{background:#2d684b}
+.macro-actions .macro-play{padding:0 13px 0 10px}
 .macro-actions .macro-delete:hover,.macro-actions .macro-delete:focus-visible{background:#fff7f4;border-color:#e2b6a9;color:#a74731}
 @container (max-width:520px){.macro-row{grid-template-columns:24px minmax(0,1fr)}.macro-actions{grid-column:1/-1;flex-direction:row}.macro-actions .macro-edit{margin-left:auto}.macro-actions button{height:40px;min-width:40px;border-radius:20px}}
 .hand-diagram{background:radial-gradient(ellipse at 48% 42%,#ffffff 0%,#f7faf7 62%,#eff4ef 100%)}
