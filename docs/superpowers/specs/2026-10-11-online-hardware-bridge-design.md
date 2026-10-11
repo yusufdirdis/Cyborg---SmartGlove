@@ -113,6 +113,9 @@ Both gates are enforced **on the laptop by the bridge**, so a compromised Railwa
 
 ## 7. Frontend
 
+- Implemented on top of the UI/UX redesign (PR #5). The redesign shows "local only" cards on the online site. Here `gloveLocked(status)` replaces its `isDemo` check for glove features, so they unlock while the bridge is online and armed. AI Vision stays local-only.
+- The bridge forwards the laptop's telemetry `physical` block (at most 4 updates a second, read-only), so the Overview's physical mode and the 3D glove show the real servos remotely.
+
 - A glove banner on the Dashboard, Manual Control and Macro Studio: "Glove offline", "Online, not armed (ask the operator)", or "Armed, 4:12 left".
 - An operator-code prompt shown only when a hardware action returns 403 for a missing or expired code: "Ask the person at the glove for the operator code". The code is kept in `sessionStorage`, so it's forgotten when the tab closes, and cleared when the bridge reports a new arm session.
 - The existing Check move / Confirm movement / Test on glove flows stay unchanged.

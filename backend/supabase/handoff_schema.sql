@@ -79,6 +79,11 @@ create table if not exists handoff.vision_detections (
   instance    text not null default 'local'
 );
 
+-- Macro origin labels ("From you" / "From the assistant"); the API's data version 3 labels existing rows once.
+alter table handoff.macros add column if not exists source text not null default 'you';
+alter table handoff.macros drop constraint if exists macros_source_check;
+alter table handoff.macros add constraint macros_source_check check (source in ('you', 'assistant'));
+
 -- Data format version, upgraded by the API (store.py) inside one locked transaction.
 -- 1 = finger IDs remapped (every row comes from SQLite at version 1 or later); 2 = raw 0-4000 step counts.
 create table if not exists handoff.meta (

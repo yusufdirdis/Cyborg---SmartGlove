@@ -115,7 +115,7 @@ def test_unreachable_supabase_is_503_with_no_sqlite_fallback(scratch_db, monkeyp
 @pytest.mark.skipif(not os.environ.get("HANDOFF_TEST_PG_URL"), reason="set HANDOFF_TEST_PG_URL to test against a real handoff schema")
 def test_postgres_store_round_trip():
     pg = PostgresStore(os.environ["HANDOFF_TEST_PG_URL"])
-    pg.init_schema(lambda p: p)
+    pg.init_schema([])
     try:
         steps = [{"positions": {str(i): 10 for i in range(1, 7)}, "duration_ms": 500}]
         saved = pg.save_macro({"name": "pytest macro", "description": "", "kind": "pose", "steps": steps})

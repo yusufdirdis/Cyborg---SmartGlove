@@ -171,6 +171,8 @@ class Bridge:
         self.connected = False
         self.last_error = ""
         self.local_ok = False
+        self.local_physical: dict | None = None
+        self._physical_event: asyncio.Event | None = None
 
     def local_stop(self, reason: str) -> None:
         self.state.disarm(reason)
@@ -190,6 +192,25 @@ class Bridge:
         self.state.note(method, path, status)
         await ws.send(json.dumps({"type": "response", "id": message.get("id"), "status": status, "body": payload}))
 
+    async def watch_local(self) -> None:
+        """Listen to the local API's telemetry. Being a listener also makes it poll the servo positions."""
+        import websockets
+
+        parts = urlsplit(self.local.base)
+        url = f"ws://{parts.hostname}:{parts.port or 80}/ws/telemetry"
+        while True:
+            try:
+                async with websockets.connect(url, open_timeout=5) as ws:
+                    async for raw in ws:
+                        physical = json.loads(raw).get("physical")
+                        if isinstance(physical, dict) and physical != self.local_physical:
+                            self.local_physical = physical
+                            if self._physical_event:
+                                self._physical_event.set()
+            except Exception:
+                self.local_physical = None
+            await asyncio.sleep(2)
+
     async def run_once(self) -> None:
         import websockets
 
@@ -207,7 +228,19 @@ class Bridge:
                     self.local_ok = await asyncio.to_thread(self.local.reachable)
                     await ws.send(json.dumps({"type": "ping", "state": self._status()}))
 
-            beat = asyncio.create_task(heartbeat())
+            self._physical_event = asyncio.Event()
+            if self.local_physical:
+                self._physical_event.set()
+
+            async def forward_positions():
+                while True:  # read-only positions, at most 4 updates a second
+                    await self._physical_event.wait()
+                    self._physical_event.clear()
+                    if self.local_physical:
+                        await ws.send(json.dumps({"type": "physical", "physical": self.local_physical}))
+                    await asyncio.sleep(0.25)
+
+            beat, positions = asyncio.create_task(heartbeat()), asyncio.create_task(forward_positions())
             try:
                 while True:
                     message = json.loads(await asyncio.wait_for(ws.recv(), HEARTBEAT_TIMEOUT_S))
@@ -215,6 +248,7 @@ class Bridge:
                         asyncio.create_task(self._answer(ws, message))
             finally:
                 beat.cancel()
+                positions.cancel()
 
     async def run_forever(self) -> None:
         delay = 2
@@ -301,7 +335,7 @@ async def main_async(args) -> None:
     bridge = Bridge(args.url, token, LocalAPI(args.local))
     server = uvicorn.Server(uvicorn.Config(arm_app(bridge), host="127.0.0.1", port=args.port, log_level="warning"))
     print(f"handoff bridge: arm page at http://127.0.0.1:{args.port}  ->  {args.url}")
-    await asyncio.gather(server.serve(), bridge.run_forever())
+    await asyncio.gather(server.serve(), bridge.run_forever(), bridge.watch_local())
 
 
 def main(argv=None) -> None:

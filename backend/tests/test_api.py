@@ -17,7 +17,7 @@ def pose(value=0):
     return {str(i): value for i in range(1, 7)}
 
 
-def test_macro_round_trip_and_import_export():
+def test_macro_round_trip():
     with TestClient(app) as client:
         payload = {"name": "Test wave", "description": "Two steps", "kind": "sequence", "steps": [{"positions": pose(1200), "duration_ms": 200}, {"positions": pose(3500), "duration_ms": 200}]}
         created = client.post("/api/macros", json=payload)
@@ -26,14 +26,13 @@ def test_macro_round_trip_and_import_export():
         assert len(created.json()["steps"]) == 2
         payload["name"] = "Edited wave"
         assert client.put(f"/api/macros/{macro_id}", json=payload).json()["name"] == "Edited wave"
-        exported = client.get("/api/macros/export").json()
-        assert exported["version"] == 3
-        assert any(m["name"] == "Edited wave" for m in exported["macros"])
-        assert client.post("/api/macros/import", json={"version": 3, "macros": [payload]}).json() == {"imported": 1}
+        assert any(m["name"] == "Edited wave" for m in client.get("/api/macros").json())
+        assert client.get("/api/macros/export").status_code in (404, 405)
+        assert client.post("/api/macros/import", json={"version": 3, "macros": [payload]}).status_code in (404, 405)
         assert client.delete(f"/api/macros/{macro_id}").status_code == 204
 
 
-def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
+def test_user_servo_ids_keep_finger_meaning():
     with TestClient(app) as client:
         assert client.get("/api/servos").json() == [
             {"id": 1, "name": "Pinky finger"},
@@ -43,20 +42,6 @@ def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
             {"id": 5, "name": "Thumb flexion (up/down)"},
             {"id": 6, "name": "Thumb side-to-side"},
         ]
-        old_positions = {str(i): i * 10 for i in range(1, 7)}
-        payload = {"version": 1, "macros": [{"name": "Legacy mapping check", "description": "", "kind": "pose", "steps": [{"positions": old_positions, "duration_ms": 700}]}]}
-        assert client.post("/api/macros/import", json=payload).json() == {"imported": 1}
-        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Legacy mapping check")
-        assert imported["steps"][0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
-
-
-def test_version_two_percent_import_is_converted_to_raw_counts():
-    with TestClient(app) as client:
-        old = {"name": "Percent export", "description": "", "kind": "pose",
-               "steps": [{"positions": pose(75), "duration_ms": 500}]}
-        assert client.post("/api/macros/import", json={"version": 2, "macros": [old]}).status_code == 200
-        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Percent export")
-        assert imported["steps"][0]["positions"] == pose(3000)
 
 
 def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeypatch):
@@ -71,7 +56,47 @@ def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeyp
     with main_module.db() as conn:
         stored = json.loads(conn.execute("SELECT steps FROM macros WHERE id='old'").fetchone()[0])
         assert stored[0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+def test_macro_source_defaults_to_you_and_survives_edits():
+    with TestClient(app) as client:
+        payload = {"name": "Origin check", "description": "", "kind": "pose", "steps": [{"positions": pose(100), "duration_ms": 300}]}
+        created = client.post("/api/macros", json=payload).json()
+        assert created["source"] == "you"
+        assistant = client.post("/api/macros", json={**payload, "name": "Origin check AI", "source": "assistant"}).json()
+        assert assistant["source"] == "assistant"
+        edited = client.put(f"/api/macros/{assistant['id']}", json={**payload, "name": "Origin check AI edited"}).json()
+        assert edited["source"] == "assistant"
+        assert client.post("/api/macros", json={**payload, "source": "robot"}).status_code == 422
+        for macro_id in (created["id"], assistant["id"]):
+            client.delete(f"/api/macros/{macro_id}")
+
+
+def test_seeded_samples_are_from_the_assistant(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "DB_PATH", tmp_path / "seeded.sqlite3")
+    main_module.init_db()
+    with main_module.db() as conn:
+        rows = conn.execute("SELECT name, source FROM macros").fetchall()
+    assert len(rows) == 5 and {row["source"] for row in rows} == {"assistant"}
+
+
+def test_existing_database_gains_source_column(tmp_path, monkeypatch):
+    path = tmp_path / "v2.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
+        step = json.dumps([{"positions": pose(0), "duration_ms": 700}])
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("a", "Open hand", "All fingers relaxed", "pose", step, 1.0, 1.0))
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("b", "Wave", "Saved from AI assistant", "pose", step, 1.0, 1.0))
+        conn.execute("INSERT INTO macros VALUES (?,?,?,?,?,?,?)", ("c", "Mine", "", "pose", step, 1.0, 1.0))
+        conn.execute("PRAGMA user_version = 2")
+    monkeypatch.setattr(main_module, "DB_PATH", path)
+    main_module.init_db()
+    main_module.init_db()
+    with main_module.db() as conn:
+        sources = {row["id"]: row["source"] for row in conn.execute("SELECT id, source FROM macros")}
+        assert sources == {"a": "assistant", "b": "assistant", "c": "you"}
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_fresh_sample_gestures_use_correct_finger_ids(tmp_path, monkeypatch):

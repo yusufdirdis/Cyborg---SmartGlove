@@ -32,8 +32,11 @@ JSON_COLUMNS = {"readings", "request", "result", "command", "servo_ids"}
 PROPOSAL_STATUSES = {"proposed", "confirmed", "saved", "cancelled", "expired"}
 
 
-# (data version, step-positions transform), applied in order and once per database.
-Upgrades = list[tuple[int, Callable[[dict], dict]]]
+# (data version, kind, transform), applied in order and once per database.
+#   "positions": transform(step_positions) -> new positions, applied to every step of every macro.
+#   "source":    transform(name, description, source) -> new source ("you" / "assistant").
+Upgrades = list[tuple[int, str, Callable]]
+MACRO_SOURCES = ("you", "assistant")
 
 
 def upgrade_steps(steps: list[dict], transform: Callable[[dict], dict]) -> list[dict]:
@@ -93,12 +96,17 @@ class SQLiteStore:
         with self.connect() as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS macros (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, kind TEXT NOT NULL, steps TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS calibration (servo_id INTEGER PRIMARY KEY, data TEXT NOT NULL)")
+            if "source" not in {r["name"] for r in conn.execute("PRAGMA table_info(macros)")}:
+                conn.execute("ALTER TABLE macros ADD COLUMN source TEXT NOT NULL DEFAULT 'you'")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            for target, transform in upgrades:
+            for target, kind, transform in upgrades:
                 if version >= target:
                     continue
-                for row in list(conn.execute("SELECT id, steps FROM macros")):
-                    conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(upgrade_steps(json.loads(row["steps"]), transform)), row["id"]))
+                for row in list(conn.execute("SELECT id, name, description, steps, source FROM macros")):
+                    if kind == "positions":
+                        conn.execute("UPDATE macros SET steps=? WHERE id=?", (json.dumps(upgrade_steps(json.loads(row["steps"]), transform)), row["id"]))
+                    else:
+                        conn.execute("UPDATE macros SET source=? WHERE id=?", (transform(row["name"], row["description"], row["source"]), row["id"]))
                 conn.execute(f"PRAGMA user_version = {int(target)}")
                 version = target
             for table in ("macros", "calibration"):
@@ -116,7 +124,7 @@ class SQLiteStore:
 
     @staticmethod
     def _macro(row) -> dict:
-        return {"id": row["id"], "name": row["name"], "description": row["description"], "kind": row["kind"], "steps": json.loads(row["steps"]), "created_at": row["created_at"], "updated_at": row["updated_at"], "revision": row["revision"] if "revision" in row.keys() else 1}
+        return {"id": row["id"], "name": row["name"], "description": row["description"], "kind": row["kind"], "source": row["source"] if "source" in row.keys() else "you", "steps": json.loads(row["steps"]), "created_at": row["created_at"], "updated_at": row["updated_at"], "revision": row["revision"] if "revision" in row.keys() else 1}
 
     def list_macros(self) -> list[dict]:
         with self.connect() as conn:
@@ -130,12 +138,13 @@ class SQLiteStore:
     def save_macro(self, data: dict, macro_id: str | None = None, expected_revision: int | None = None) -> dict:
         now = time.time()
         with self.connect() as conn:
-            current = conn.execute("SELECT created_at, revision FROM macros WHERE id=?", (macro_id,)).fetchone() if macro_id else None
+            current = conn.execute("SELECT created_at, revision, source FROM macros WHERE id=?", (macro_id,)).fetchone() if macro_id else None
             if current and expected_revision is not None and current["revision"] != expected_revision:
                 raise RevisionConflict("This macro changed since you loaded it. Reload and try again.")
             macro_id = macro_id or str(uuid4())
-            conn.execute("INSERT OR REPLACE INTO macros (id, name, description, kind, steps, created_at, updated_at, revision) VALUES (?,?,?,?,?,?,?,?)",
-                         (macro_id, data["name"], data["description"], data["kind"], json.dumps(data["steps"]), current["created_at"] if current else now, now, current["revision"] + 1 if current else 1))
+            source = current["source"] if current else data.get("source", "you")  # editing never changes who made a macro
+            conn.execute("INSERT OR REPLACE INTO macros (id, name, description, kind, steps, created_at, updated_at, revision, source) VALUES (?,?,?,?,?,?,?,?,?)",
+                         (macro_id, data["name"], data["description"], data["kind"], json.dumps(data["steps"]), current["created_at"] if current else now, now, current["revision"] + 1 if current else 1, source))
             return self._macro(conn.execute("SELECT * FROM macros WHERE id=?", (macro_id,)).fetchone())
 
     def delete_macro(self, macro_id: str) -> bool:
@@ -233,12 +242,15 @@ class PostgresStore:
             with self.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
                 cur.execute(self._sql("select value from handoff.meta where key = 'data_version' for update"))
                 version = int(cur.fetchone()[0])
-                for target, transform in upgrades:
+                for target, kind, transform in upgrades:
                     if version >= target:
                         continue
-                    cur.execute(self._sql("select id, steps from handoff.macros"))
-                    for macro_id, steps in cur.fetchall():
-                        cur.execute(self._sql("update handoff.macros set steps = %s where id = %s"), (Jsonb(upgrade_steps(steps, transform)), macro_id))
+                    cur.execute(self._sql("select id, name, description, steps, source from handoff.macros"))
+                    for macro_id, name, description, steps, source in cur.fetchall():
+                        if kind == "positions":
+                            cur.execute(self._sql("update handoff.macros set steps = %s where id = %s"), (Jsonb(upgrade_steps(steps, transform)), macro_id))
+                        else:
+                            cur.execute(self._sql("update handoff.macros set source = %s where id = %s"), (transform(name, description, source), macro_id))
                     version = target
                 cur.execute(self._sql("update handoff.meta set value = %s where key = 'data_version'"), (str(version),))
         except (psycopg.OperationalError, PoolTimeout) as exc:
@@ -249,7 +261,7 @@ class PostgresStore:
 
     @staticmethod
     def _macro(row) -> dict:
-        return {"id": str(row["id"]), "name": row["name"], "description": row["description"], "kind": row["kind"], "steps": row["steps"], "created_at": _epoch(row["created_at"]), "updated_at": _epoch(row["updated_at"]), "revision": row["revision"]}
+        return {"id": str(row["id"]), "name": row["name"], "description": row["description"], "kind": row["kind"], "source": row.get("source", "you"), "steps": row["steps"], "created_at": _epoch(row["created_at"]), "updated_at": _epoch(row["updated_at"]), "revision": row["revision"]}
 
     def list_macros(self) -> list[dict]:
         return [self._macro(r) for r in self._run("select * from handoff.macros order by updated_at desc", fetch="all")]
@@ -267,15 +279,15 @@ class PostgresStore:
         from psycopg.types.json import Jsonb
 
         if macro_id is None:
-            row = self._run("insert into handoff.macros (name, description, kind, steps) values (%s,%s,%s,%s) returning *",
-                            (data["name"], data["description"], data["kind"], Jsonb(data["steps"])), fetch="one")
+            row = self._run("insert into handoff.macros (name, description, kind, steps, source) values (%s,%s,%s,%s,%s) returning *",
+                            (data["name"], data["description"], data["kind"], Jsonb(data["steps"]), data.get("source", "you")), fetch="one")
             return self._macro(row)
-        row = self._run("""insert into handoff.macros as m (id, name, description, kind, steps) values (%s::uuid,%s,%s,%s,%s)
+        row = self._run("""insert into handoff.macros as m (id, name, description, kind, steps, source) values (%s::uuid,%s,%s,%s,%s,%s)
                            on conflict (id) do update set name=excluded.name, description=excluded.description, kind=excluded.kind,
                              steps=excluded.steps, revision=m.revision + 1, updated_at=now()
                            where %s::int is null or m.revision = %s::int
                            returning *""",
-                        (macro_id, data["name"], data["description"], data["kind"], Jsonb(data["steps"]), expected_revision, expected_revision), fetch="one")
+                        (macro_id, data["name"], data["description"], data["kind"], Jsonb(data["steps"]), data.get("source", "you"), expected_revision, expected_revision), fetch="one")
         if row is None:
             raise RevisionConflict("This macro changed since you loaded it. Reload and try again.")
         return self._macro(row)

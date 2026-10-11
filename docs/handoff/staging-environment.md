@@ -1,13 +1,20 @@
 # Agent handoff: set up a staging (testing) environment with the Railway and Vercel CLIs
 
 **Audience:** the agent working for the teammate who owns the Vercel and Railway accounts.
-**Goal:** a separate, short-lived test copy of the site that runs **branch `feat/onlineHardware`** (online glove bridge, vision, one-click macros) **without changing production's deployment** (`givemeahand.fit`, `api.givemeahand.fit`, branch `feat/deploy`). Staging shares production's data on purpose.
+**Goal:** a separate, short-lived test copy of the site that runs **branch `feat/onlineHardware`**: the UI/UX redesign from `main` (PR #5), the online glove bridge, vision and one-click macros. **without changing production's deployment** (`givemeahand.fit`, `api.givemeahand.fit`, branch `feat/deploy`). Staging shares production's data on purpose.
 **Cost:** Railway bills by the minute (a few minutes is under $0.01; a forgotten day is about $0.15–0.50). Stop it when testing is done (§5). Vercel previews are free.
 
 ## 0. What already exists (done by the owner)
 - **Database:** staging uses the **same Supabase data as production** (schema `handoff`, the default), on the owner's decision. Macros, calibration and logs are shared, so a macro created or deleted on staging also appears on the live site. Log rows from staging are tagged `instance = staging`.
 - **Same database URL:** staging uses the same `SUPABASE_DB_URL` as production. Copy it from production's Railway variables, never print it, and **don't set `HANDOFF_DB_SCHEMA`**.
-- **Code:** `feat/onlineHardware` on GitHub. Tests: `cd backend && python -m pytest -q` gives 176 passed, 2 skipped.
+- **Database change already applied:** macros now have a `source` column ("From you" / "From the assistant"). The owner added it to Supabase, and the currently deployed production code ignores it safely. The first staging start labels the five built-in samples and AI-saved macros "From the assistant", once (data version 3). That label is shared with production, as intended.
+- **Code:** `feat/onlineHardware` on GitHub. Tests: `cd backend && python -m pytest -q` gives 179 passed, 2 skipped. `cd frontend && npm run build` passes.
+- **What the redesign changes on the online site:**
+  - Glove controls show "local only" cards **until the laptop bridge is online and armed**. That covers Manual Control, Settings › Devices, the Overview's physical mode and "Test on glove". The sidebar then says "Real glove armed via the bridge" instead of "Simulation only on this site".
+  - AI Vision always stays local-only.
+  - Settings shows only the Gemini key, "Saved in this browser".
+  - Macro import/export is gone.
+  - The Live button is in the top bar.
 
 ## 1. Production must not change. Read this first
 - `.railway/railway.ts` manages the project as code and pins `handoff-api` to **`branch: "feat/deploy"`**. Railway's docs warn that **whole-project `railway config apply` can delete resources missing from the file**.
@@ -67,7 +74,10 @@ Use the **stable branch URL**, not a one-off deployment URL, as `$STAGING_WEB`. 
 - [ ] `curl -X POST -H 'Content-Type: application/json' $STAGING_API/api/hardware/live -d '{"moves":[{"servo_id":1,"target":2000,"speed":100}]}'` returns **403** ("The glove is offline…").
 - [ ] `curl -X POST $STAGING_API/api/control/stop` returns 200, then `/api/control/reset` returns 200.
 - [ ] A CORS preflight from `Origin: $STAGING_WEB` is allowed, and one from `https://evil.example` is rejected.
-- [ ] `$STAGING_WEB` loads, shows "Real glove offline. The bridge on the laptop is not connected.", and Macro Studio shows the same macros as production.
+- [ ] `$STAGING_WEB` loads, shows "Real glove offline. The bridge on the laptop is not connected.", and Macro Studio shows the same macros as production, with "From you" / "From the assistant" labels.
+- [ ] With no bridge connected: the sidebar says "Simulation only on this site", Manual Control and Settings › Devices show the local-only cards, AI Vision shows its local-only card, and "Test on glove" is disabled with its reason.
+- [ ] Settings shows a single Gemini card. After pasting a key and clicking **Save key**, the card reads "Saved in this browser · ••••xxxx", and the key appears in no network response.
+- [ ] `curl $STAGING_API/api/macros` rows include `"source"`.
 - [ ] The staging JS bundle contains `$STAGING_API`, not `api.givemeahand.fit`.
 
 **Production unchanged**
@@ -80,6 +90,7 @@ On the laptop with the glove:
 1. Local API: `uvicorn app.main:app --host 127.0.0.1 --port 8000`, with `SUPABASE_DB_URL` from `backend/.env` (the shared data, so macro IDs match).
 2. Bridge: `HANDOFF_BRIDGE_TOKEN=<staging token> python -m app.bridge --url wss://<STAGING_API host>/ws/bridge`.
 3. Open http://127.0.0.1:8765, arm, and give the code to whoever drives from `$STAGING_WEB`. Do a supervised, off-body test.
+4. While armed, `$STAGING_WEB` unlocks Manual Control, Devices and "Test on glove", and the Overview's physical mode shows the laptop's live servo positions, forwarded read-only by the bridge. Stop, disarm or a lost connection locks them again.
 
 ## 6. Tear down after testing (stops the cost)
 - Remove the staging deployment (`railway down --environment staging --service handoff-api`; check `--help`), or delete the `staging` environment. Production is unaffected either way.

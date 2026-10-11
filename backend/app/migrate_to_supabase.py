@@ -54,11 +54,11 @@ def _copy(source, target, overwrite, Jsonb) -> dict:
     for m in macros:
         if m["id"] in same and not overwrite:
             continue
-        target._run("""insert into handoff.macros (id, name, description, kind, steps, revision, created_at, updated_at)
-                       values (%s::uuid,%s,%s,%s,%s,1,%s,%s)
+        target._run("""insert into handoff.macros (id, name, description, kind, steps, source, revision, created_at, updated_at)
+                       values (%s::uuid,%s,%s,%s,%s,%s,1,%s,%s)
                        on conflict (id) do update set name=excluded.name, description=excluded.description, kind=excluded.kind,
-                         steps=excluded.steps, created_at=excluded.created_at, updated_at=excluded.updated_at""",
-                    (m["id"], m["name"], m["description"], m["kind"], Jsonb(m["steps"]), _ts(m["created_at"]), _ts(m["updated_at"])))
+                         steps=excluded.steps, source=excluded.source, created_at=excluded.created_at, updated_at=excluded.updated_at""",
+                    (m["id"], m["name"], m["description"], m["kind"], Jsonb(m["steps"]), m.get("source", "you"), _ts(m["created_at"]), _ts(m["updated_at"])))
     for servo_id, data in calibration.items():
         data = {k: v for k, v in data.items() if k != "revision"}
         target._run("""insert into handoff.calibration (servo_id, data) values (%s,%s)

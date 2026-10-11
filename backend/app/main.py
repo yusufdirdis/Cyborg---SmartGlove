@@ -69,6 +69,7 @@ class MacroInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str = Field(default="", max_length=240)
     kind: Literal["pose", "sequence"]
+    source: Literal["you", "assistant"] = "you"
     steps: list[Step] = Field(min_length=1, max_length=30)
 
     @model_validator(mode="after")
@@ -99,11 +100,6 @@ class CalibrationInput(BaseModel):
         return self
 
 
-class ImportPayload(BaseModel):
-    version: Literal[1, 2, 3]
-    macros: list[MacroInput] = Field(max_length=100)
-
-
 class MacroUpdate(MacroInput):
     revision: int | None = None  # the revision the editor loaded; a mismatch is a 409
 
@@ -113,8 +109,6 @@ class CalibrationUpdate(CalibrationInput):
 
 
 store = make_store(lambda: DB_PATH)
-# (data version, step-positions transform). Each store applies the ones it has not applied yet.
-DATA_UPGRADES = [(1, lambda positions: remap_legacy_positions(positions)), (2, percent_to_counts)]
 PLACEHOLDER_CALIBRATION = {"open_count": 2048, "closed_count": 2448, "min_count": 1800, "max_count": 2600, "direction": "increasing", "speed": 30, "verified": False, "jog_limits_verified": False}
 
 
@@ -123,24 +117,40 @@ def db():
     return store.connect()
 
 
+SAMPLES = [
+    ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
+    ("Gentle fist", "A light, even curl", [75, 75, 75, 75, 75, 65]),
+    ("Point", "Index extended, other fingers curled", [80, 80, 80, 0, 75, 55]),
+    ("Pinch", "Thumb meets index", [0, 0, 0, 45, 55, 75]),
+    ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
+]
+SAMPLE_MACROS = [(name, description) for name, description, _ in SAMPLES]
+
+
+def label_source(name: str, description: str, source: str) -> str:
+    """Data version 3: the five built-in samples and assistant saves are "From the assistant"."""
+    return "assistant" if (name, description) in SAMPLE_MACROS or description == "Saved from AI assistant" else source
+
+
+# (data version, kind, transform). Each store applies, once and in order, the ones it has not applied yet.
+DATA_UPGRADES = [(1, "positions", lambda positions: remap_legacy_positions(positions)),
+                 (2, "positions", percent_to_counts),
+                 (3, "source", label_source)]
+
+
 def init_db():
     store.init_schema(DATA_UPGRADES)
     if store.count_macros() == 0:
-        samples = [
-            ("Open hand", "All fingers relaxed", [0, 0, 0, 0, 0, 0]),
-            ("Gentle fist", "A light, even curl", [75, 75, 75, 75, 75, 65]),
-            ("Point", "Index extended, other fingers curled", [80, 80, 80, 0, 75, 55]),
-            ("Pinch", "Thumb meets index", [0, 0, 0, 45, 55, 75]),
-            ("Peace sign", "Index and middle extended", [80, 80, 0, 0, 70, 50]),
-        ]
-        for name, description, values in samples:
-            save_macro(MacroInput(name=name, description=description, kind="pose", steps=[Step(positions=dict(zip(SERVO_NAMES, [v * 40 for v in values])), duration_ms=700)]))
+        for name, description, values in SAMPLES:
+            save_macro(MacroInput(name=name, description=description, kind="pose", source="assistant", steps=[Step(positions=dict(zip(SERVO_NAMES, [v * 40 for v in values])), duration_ms=700)]))
     for sid in SERVO_NAMES:
         store.ensure_calibration(sid, PLACEHOLDER_CALIBRATION)
 
 
 def save_macro(macro: MacroInput, macro_id: str | None = None, expected_revision: int | None = None) -> dict:
-    data = {"name": macro.name.strip(), "description": macro.description, "kind": macro.kind, "steps": [s.model_dump() for s in macro.steps]}
+    # The store keeps an existing macro's source: editing never changes who made it.
+    data = {"name": macro.name.strip(), "description": macro.description, "kind": macro.kind, "source": macro.source,
+            "steps": [s.model_dump() for s in macro.steps]}
     return store.save_macro(data, macro_id, expected_revision)
 
 
@@ -297,7 +307,15 @@ async def lifespan(_app: FastAPI):
         sim.task.cancel()
 
 
-bridge_hub.on_change = lambda: sim.broadcast()
+async def _bridge_changed():
+    """Hosted API: the 3D glove and Overview read the laptop's positions through the bridge (read-only)."""
+    if cloud_mode():
+        sim.physical = bridge_hub.physical or {"connected": False, "positions": {sid: None for sid in SERVO_NAMES},
+                                               "read_at": None, "error": "The glove is offline (no bridge)." if not bridge_hub.online else None}
+    await sim.broadcast()
+
+
+bridge_hub.on_change = _bridge_changed
 app = FastAPI(title="handoff", version="0.1.0", lifespan=lifespan)
 @app.exception_handler(StoreUnavailable)
 async def store_unavailable(_request: Request, exc: StoreUnavailable):
@@ -616,25 +634,6 @@ def delete_macro(macro_id: str):
         raise HTTPException(404, "Macro not found")
 
 
-@app.get("/api/macros/export")
-def export_macros():
-    return {"version": 3, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
-
-
-@app.post("/api/macros/import")
-def import_macros(payload: ImportPayload):
-    for macro in payload.macros:
-        data = macro.model_dump()
-        if payload.version == 1:
-            for step in data["steps"]:
-                step["positions"] = remap_legacy_positions(step["positions"])
-        if payload.version in (1, 2):
-            for step in data["steps"]:
-                step["positions"] = percent_to_counts(step["positions"])
-        save_macro(MacroInput.model_validate(data))
-    return {"imported": len(payload.macros)}
-
-
 @app.post("/api/macros/{macro_id}/play")
 async def play_macro(macro_id: str):
     row = store.get_macro(macro_id)
@@ -860,7 +859,7 @@ def save_macro_from_command(command: assistant.Command) -> dict:
         payload = MacroInput(name=row["name"], description=row["description"], kind="sequence", steps=[*existing, *steps])
         saved = save_macro(payload, row["id"], row["revision"])
     else:
-        payload = MacroInput(name=command.name, description="Saved from AI assistant", kind="pose" if len(steps) == 1 else "sequence", steps=steps)
+        payload = MacroInput(name=command.name, description="Saved from AI assistant", kind="pose" if len(steps) == 1 else "sequence", source="assistant", steps=steps)
         saved = save_macro(payload)
     return {"saved": True, "mode": "saved", "macro": saved}
 

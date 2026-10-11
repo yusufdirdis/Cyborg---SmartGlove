@@ -49,6 +49,7 @@ class BridgeHub:
         self.ws: WebSocket | None = None
         self.pending: dict[str, asyncio.Future] = {}
         self.state: dict = {"armed": False, "armed_until": None, "session": None, "local_api": False}
+        self.physical: dict | None = None  # the laptop's read-only servo positions, for the 3D glove
         self.on_change = None  # set by main to broadcast telemetry
 
     @property
@@ -93,6 +94,10 @@ class BridgeHub:
                         if before != self.state:
                             await self._changed()
                     await ws.send_text(json.dumps({"type": "pong"}))
+                elif kind == "physical":
+                    if isinstance(message.get("physical"), dict):
+                        self.physical = message["physical"]
+                        await self._changed()
                 elif kind == "response":
                     future = self.pending.pop(str(message.get("id")), None)
                     if future and not future.done():
@@ -102,6 +107,7 @@ class BridgeHub:
         finally:
             if self.ws is ws:
                 self.ws = None
+                self.physical = None
                 for future in self.pending.values():
                     if not future.done():
                         future.set_exception(BridgeUnavailable("The glove disconnected."))

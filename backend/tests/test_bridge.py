@@ -229,3 +229,23 @@ def test_website_stop_is_forwarded_to_the_bridge(cloud):
         assert (forwarded["method"], forwarded["path"]) == ("POST", "/api/control/stop")
         ws.send_text(json.dumps({"type": "response", "id": forwarded["id"], "status": 200, "body": {}}))
         client.post("/api/control/reset")
+
+
+def test_bridged_glove_positions_reach_telemetry_and_clear_on_disconnect(cloud):
+    physical = {"connected": True, "positions": {"1": 2100, "2": 2000, "3": 1990, "4": 2050, "5": 2010, "6": 1980}, "read_at": 1.0, "error": None}
+    with remote() as client:
+        with client.websocket_connect("/ws/bridge") as ws:
+            hello(ws)
+            ws.receive_text()
+            ws.send_text(json.dumps({"type": "physical", "physical": physical}))
+            for _ in range(50):
+                if client.get("/api/status").json()["physical"]["connected"]:
+                    break
+                time.sleep(0.05)
+            assert client.get("/api/status").json()["physical"]["positions"]["1"] == 2100
+        for _ in range(50):
+            if not client.get("/api/status").json()["bridge"]["online"]:
+                break
+            time.sleep(0.05)
+        after = client.get("/api/status").json()["physical"]
+        assert after["connected"] is False and "offline" in after["error"]
