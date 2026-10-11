@@ -316,9 +316,6 @@ def allowed_cors_origins() -> list[str]:
     return list(dict.fromkeys([*LOCAL_CORS_ORIGINS, *(origin for origin in extras if origin and origin != "*")]))
 
 
-app.add_middleware(CORSMiddleware, allow_origins=allowed_cors_origins(), allow_methods=["*"], allow_headers=["*"])
-
-
 @app.middleware("http")
 async def require_demo_passcode(request: Request, call_next):
     path = request.url.path
@@ -334,6 +331,11 @@ async def require_demo_passcode(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "Passcode required"})
     request.state.handoff_passcode_authenticated = True
     return await call_next(request)
+
+
+# Keep CORS outside the passcode middleware so 401/503 responses still carry
+# the headers browsers need to display the passcode gate instead of a fetch error.
+app.add_middleware(CORSMiddleware, allow_origins=allowed_cors_origins(), allow_methods=["*"], allow_headers=["*"])
 
 
 @app.get("/api/health")

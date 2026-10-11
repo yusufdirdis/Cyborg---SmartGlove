@@ -25,9 +25,10 @@ def test_http_passcode_and_public_health(monkeypatch):
     monkeypatch.delenv("HANDOFF_CLOUD", raising=False)
     with remote_client() as client:
         assert client.get("/api/health").status_code == 200
-        denied = client.get("/api/macros")
+        denied = client.get("/api/macros", headers={"Origin": "http://localhost:5173"})
         assert denied.status_code == 401
         assert denied.json() == {"detail": "Passcode required"}
+        assert denied.headers["access-control-allow-origin"] == "http://localhost:5173"
         assert client.get("/api/macros", headers={"X-Handoff-Passcode": PASSCODE}).status_code == 200
         preflight = client.options("/api/macros", headers={
             "Origin": "http://localhost:5173",
