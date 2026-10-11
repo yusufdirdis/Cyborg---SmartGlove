@@ -90,8 +90,15 @@ def fake_controller(monkeypatch):
     control.clear_pending()
 
 
-def test_preview_is_read_only_when_writes_disabled(fake_controller, monkeypatch):
+def test_hardware_writes_default_on_with_explicit_opt_out(monkeypatch):
     monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    assert control.writes_enabled() is True
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
+    assert control.writes_enabled() is False
+
+
+def test_preview_is_read_only_when_writes_disabled(fake_controller, monkeypatch):
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
     preview = control.prepare_jog(1, 10, measured_calibration(), False)
     assert preview["start"] == 1000 and preview["target"] == 1010
     assert preview["can_execute"] is False and "token" not in preview
@@ -225,7 +232,7 @@ def test_api_rejects_nonlocal_hardware_request(monkeypatch):
 
 
 def test_position_preview_is_read_only_and_respects_write_lock(fake_controller, monkeypatch):
-    monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
     calibration = CalibrationInput(open_count=2048, closed_count=2448, min_count=0,
                                    max_count=4000, direction="increasing", speed=30,
                                    verified=False, jog_limits_verified=True)

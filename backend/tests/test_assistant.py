@@ -187,5 +187,5 @@ def test_stop_reply_sends_torque_off_when_writes_enabled(fake, monkeypatch):
         assert body["hardware_stop"]["attempted"] is True
         assert [c for c in FakeDriver.calls if c[0] == "write"] == [("write", sid, 40, 0) for sid in range(1, 7)]
         assert not any(c[0] == "move" for c in FakeDriver.calls)
-        monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES")
+        monkeypatch.setenv("HANDOFF_ENABLE_HARDWARE_WRITES", "0")
         client.post("/api/control/reset")

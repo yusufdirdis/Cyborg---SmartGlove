@@ -1,7 +1,8 @@
 """Physical servo position control using the existing Feetech driver.
 
 Live edits and macro steps use the same synchronized transport and health
-checks. Hardware writes are disabled unless enabled when starting the local API.
+checks. Local hardware writes are enabled by default; set
+HANDOFF_ENABLE_HARDWARE_WRITES=0 to disable them at startup.
 """
 
 from __future__ import annotations
@@ -171,7 +172,7 @@ LIVE_MOVE_TIMEOUT_SECONDS = 30.0
 
 
 def writes_enabled() -> bool:
-    return os.environ.get("HANDOFF_ENABLE_HARDWARE_WRITES") == "1"
+    return os.environ.get("HANDOFF_ENABLE_HARDWARE_WRITES", "1") == "1"
 
 
 def clear_pending() -> None:
