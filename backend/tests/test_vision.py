@@ -1,4 +1,6 @@
 import math
+import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -6,6 +8,7 @@ from app import main as main_module
 from app.vision.gestures import GestureSmoother, classify_hand
 from app.vision.imitation import imitation_output
 from app.vision.service import VisionService, vision_service
+from app.vision import service as vision_service_module
 
 
 def open_hand_points():
@@ -105,12 +108,74 @@ def test_camera_stream_keeps_raw_and_annotated_views_separate():
     assert service.latest_jpeg("object-detection") is annotated
 
 
+def test_raw_camera_jpeg_is_encoded_before_inference_can_mutate_the_frame(monkeypatch):
+    import cv2
+    import numpy as np
+
+    service = VisionService()
+    service.config["object_detection_enabled"] = True
+    service.config["hand_tracking_enabled"] = False
+    original_color = (30, 120, 220)
+    frame = np.full((8, 8, 3), original_color, dtype=np.uint8)
+
+    def mutate_frame(image):
+        image[:] = 0
+        return []
+
+    monkeypatch.setattr(service, "_object_detections", mutate_frame)
+    monkeypatch.setattr(service, "_annotate", lambda image, detections, hand: image)
+    service.analyze_frame(frame, source="webcam", publish=True)
+
+    raw = cv2.imdecode(np.frombuffer(service.latest_jpeg("default"), dtype=np.uint8), cv2.IMREAD_COLOR)
+    annotated = cv2.imdecode(np.frombuffer(service.latest_jpeg("object-detection"), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert np.allclose(raw.mean(axis=(0, 1)), original_color, atol=8)
+    assert annotated.mean() == 0
+
+
 def test_status_reports_loaded_models_as_ready_after_a_reconnect():
     service = VisionService()
     service._object_model = object()
     service._hand_landmarker = object()
     service._state["components"] = {"object_detection": "loading", "hand_tracking": "loading"}
     assert service.status()["components"] == {"object_detection": "ready", "hand_tracking": "ready"}
+
+
+def test_macos_camera_inventory_names_the_builtin_and_external_inputs(monkeypatch):
+    monkeypatch.setattr(vision_service_module, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(
+        vision_service_module.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps({"SPCameraDataType": [
+            {"_name": "USB Camera"}, {"_name": "MacBook Air Camera"},
+        ]})),
+    )
+
+    result = VisionService().camera_devices()
+
+    assert result["default_index"] == 1
+    assert result["cameras"] == [
+        {"index": 0, "name": "USB Camera", "is_default": False},
+        {"index": 1, "name": "MacBook Air Camera", "is_default": True},
+    ]
+
+
+def test_vision_camera_inventory_endpoint(monkeypatch):
+    expected = {"cameras": [{"index": 0, "name": "MacBook Air Camera", "is_default": True}],
+                "default_index": 0, "error": None}
+    monkeypatch.setattr(vision_service, "camera_devices", lambda: expected)
+    with TestClient(main_module.app) as client:
+        response = client.get("/api/vision/cameras")
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_single_frame_endpoint_returns_the_selected_camera_view(monkeypatch):
+    monkeypatch.setattr(vision_service, "latest_jpeg", lambda view: b"jpeg-frame")
+    monkeypatch.setattr(vision_service, "status", lambda: {"started": True})
+    with TestClient(main_module.app) as client:
+        response = client.get("/api/vision/frame.jpg?view=default")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == b"jpeg-frame"
 
 
 def test_vision_api_health_and_development_page():

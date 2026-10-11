@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import requests
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -85,6 +88,50 @@ class VisionService:
             },
             "hardware_commands_enabled": False,
         }
+
+    def camera_devices(self) -> dict:
+        """List connected cameras and the OpenCV index used to select each one."""
+        if sys.platform == "darwin":
+            try:
+                result = subprocess.run(
+                    ["system_profiler", "SPCameraDataType", "-json"],
+                    capture_output=True, text=True, check=True, timeout=15,
+                )
+                entries = json.loads(result.stdout).get("SPCameraDataType", [])
+                default_index = next(
+                    (index for index, entry in enumerate(entries)
+                     if any(term in (entry.get("_name") or "").lower()
+                            for term in ("macbook", "facetime", "built-in", "built in"))),
+                    0 if entries else None,
+                )
+                cameras = [
+                    {"index": index, "name": entry.get("_name") or f"Camera {index}",
+                     "is_default": index == default_index}
+                    for index, entry in enumerate(entries)
+                ]
+                return {"cameras": cameras, "default_index": default_index, "error": None}
+            except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+                return {"cameras": [], "default_index": None,
+                        "error": f"Could not list Mac cameras: {exc}"}
+
+        try:
+            import cv2
+        except Exception as exc:
+            return {"cameras": [], "default_index": None, "error": f"OpenCV is unavailable: {exc}"}
+
+        cameras = []
+        for index in range(10):
+            capture = None
+            try:
+                capture = self._open_capture(cv2, "webcam", index)
+                if capture.isOpened():
+                    cameras.append({"index": index, "name": f"Camera {index}", "is_default": index == 0})
+            except Exception:
+                pass
+            finally:
+                if capture is not None:
+                    capture.release()
+        return {"cameras": cameras, "default_index": 0 if cameras else None, "error": None}
 
     def status(self) -> dict:
         with self._lock:
@@ -303,6 +350,13 @@ class VisionService:
     def analyze_frame(self, frame, *, source: str, publish: bool) -> dict:
         import cv2
 
+        # Keep the camera preview independent of inference. Model libraries can
+        # mutate their input buffers, so encode the raw view from a snapshot.
+        raw_frame = frame.copy()
+        raw_encoded_ok, raw_encoded = cv2.imencode(
+            ".jpg", raw_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+        )
+        raw_jpeg = raw_encoded.tobytes() if raw_encoded_ok else None
         detections: list[dict] = []
         hand = None
         errors: dict[str, str] = {}
@@ -316,8 +370,6 @@ class VisionService:
                 hand = self._hand_result(frame, smooth=publish)
             except Exception as exc:
                 errors["hand_tracking"] = str(exc)
-        raw_encoded_ok, raw_encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-        raw_jpeg = raw_encoded.tobytes() if raw_encoded_ok else None
         annotated = self._annotate(frame, detections, hand)
         encoded_ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         jpeg = encoded.tobytes() if encoded_ok else None

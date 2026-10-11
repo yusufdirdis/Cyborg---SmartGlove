@@ -7,7 +7,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .service import vision_service
@@ -47,6 +47,12 @@ class VisionStartInput(BaseModel):
 @router.get("/api/vision/health", summary="Check local vision runtime and model configuration")
 def vision_health():
     return vision_service.health()
+
+
+@router.get("/api/vision/cameras", summary="List connected local camera inputs")
+def vision_cameras(request: Request):
+    _local_request(request)
+    return vision_service.camera_devices()
 
 
 @router.get("/api/vision/status", summary="Read camera and inference status")
@@ -127,6 +133,15 @@ async def vision_video_stream(view: Literal["default", "object-detection"] = "de
 
     return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
                              headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
+@router.get("/api/vision/frame.jpg", summary="Fetch one raw or annotated camera frame")
+def vision_camera_frame(view: Literal["default", "object-detection"] = "default"):
+    frame = vision_service.latest_jpeg(view)
+    if not vision_service.status()["started"] or frame is None:
+        raise HTTPException(503, "The camera has not produced a frame yet.")
+    return Response(frame, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @router.get("/vision/ui", response_class=HTMLResponse, include_in_schema=False)
