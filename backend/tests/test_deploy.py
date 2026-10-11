@@ -1,0 +1,119 @@
+"""Cloud deployment gates: passcodes, cloud-only routes, and the hardware boundary."""
+
+import os
+from pathlib import Path
+
+os.environ["HANDOS_DB"] = str(Path(__file__).parent / "test.sqlite3")
+
+import pytest
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from app import assistant, servo_status
+from app.main import allowed_cors_origins, app
+
+PASSCODE = "deployment-test-passcode-123"
+REMOTE_CLIENT = ("203.0.113.17", 41000)
+
+
+def remote_client():
+    return TestClient(app, client=REMOTE_CLIENT)
+
+
+def test_http_passcode_and_public_health(monkeypatch):
+    monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
+    monkeypatch.delenv("HANDOFF_CLOUD", raising=False)
+    with remote_client() as client:
+        assert client.get("/api/health").status_code == 200
+        denied = client.get("/api/macros", headers={"Origin": "http://localhost:5173"})
+        assert denied.status_code == 401
+        assert denied.json() == {"detail": "Passcode required"}
+        assert denied.headers["access-control-allow-origin"] == "http://localhost:5173"
+        assert client.get("/api/macros", headers={"X-Handoff-Passcode": PASSCODE}).status_code == 200
+        preflight = client.options("/api/macros", headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-handoff-passcode",
+        })
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_websocket_passcode_and_unset_local_behavior(monkeypatch):
+    monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
+    monkeypatch.delenv("HANDOFF_CLOUD", raising=False)
+    with remote_client() as client:
+        with pytest.raises(WebSocketDisconnect) as denied:
+            with client.websocket_connect("/ws/telemetry"):
+                pass
+        assert denied.value.code == 4401
+        with client.websocket_connect(f"/ws/telemetry?passcode={PASSCODE}") as socket:
+            assert socket.receive_json()["mode"] == "simulation"
+
+    monkeypatch.delenv("HANDOFF_PASSCODE")
+    with TestClient(app) as client:
+        assert client.get("/api/macros").status_code == 200
+        with client.websocket_connect("/ws/telemetry") as socket:
+            assert socket.receive_json()["mode"] == "simulation"
+
+
+def test_cloud_without_passcode_fails_closed_but_keeps_health_open(monkeypatch):
+    monkeypatch.setenv("HANDOFF_CLOUD", "1")
+    monkeypatch.delenv("HANDOFF_PASSCODE", raising=False)
+    with remote_client() as client:
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/macros").status_code == 503
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("get", "/api/settings/providers", None),
+    ("put", "/api/settings/providers/gemini", {"model": "gemini-test"}),
+    ("delete", "/api/settings/providers/gemini/key", None),
+    ("post", "/api/settings/providers/gemini/test", None),
+])
+def test_cloud_provider_settings_are_managed_in_railway(monkeypatch, method, path, body):
+    monkeypatch.setenv("HANDOFF_CLOUD", "1")
+    monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
+    with remote_client() as client:
+        options = {"headers": {"X-Handoff-Passcode": PASSCODE}}
+        if body is not None:
+            options["json"] = body
+        response = getattr(client, method)(path, **options)
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Provider keys are managed in Railway variables"}
+
+
+def test_cloud_live_session_accepts_authenticated_remote_request(monkeypatch):
+    monkeypatch.setenv("HANDOFF_CLOUD", "1")
+    monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTestKey-1234567890abcdWXYZ")
+    monkeypatch.setattr(assistant, "_sdk_create_token", lambda _key, _config: "auth_tokens/cloud-test")
+    with remote_client() as client:
+        response = client.post("/api/assistant/live/session", headers={"X-Handoff-Passcode": PASSCODE})
+    assert response.status_code == 200
+    assert response.json()["token"] == "auth_tokens/cloud-test"
+
+
+def test_cloud_hardware_status_never_scans_and_writes_stay_local(monkeypatch):
+    monkeypatch.setenv("HANDOFF_CLOUD", "1")
+    monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
+    monkeypatch.delenv("HANDOFF_ENABLE_HARDWARE_WRITES", raising=False)
+    monkeypatch.setattr(servo_status, "scan_servos", lambda: pytest.fail("Cloud must not scan USB hardware"))
+    headers = {"X-Handoff-Passcode": PASSCODE}
+    with remote_client() as client:
+        status = client.get("/api/hardware/status", headers=headers)
+        write = client.post("/api/hardware/live", json={"moves": [{"servo_id": 1, "target": 2000, "speed": 100}]}, headers=headers)
+    assert status.status_code == 200
+    assert status.json()["connected"] is False
+    assert status.json()["error"] == "Hardware is only available on the local API."
+    assert write.status_code == 403
+
+
+def test_allowed_cors_origins_include_configured_origins_without_wildcard(monkeypatch):
+    monkeypatch.setenv("HANDOFF_CORS_ORIGINS", "https://handoff.vercel.app, https://preview.vercel.app/ , *")
+    assert allowed_cors_origins() == [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "https://handoff.vercel.app",
+        "https://preview.vercel.app",
+    ]

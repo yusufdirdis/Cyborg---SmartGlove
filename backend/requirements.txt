@@ -8,3 +8,5 @@ google-genai>=2.29,<3
 openai>=3.28,<4
 huggingface_hub>=2.2,<3
 python-dotenv>=1.2,<2
+psycopg[binary]>=3.2,<4
+psycopg-pool>=3.2,<4

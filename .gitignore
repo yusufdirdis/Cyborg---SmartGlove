@@ -1,5 +1,8 @@
 frontend/node_modules/
+node_modules/
 frontend/dist/
+.env*.local
+.vercel/
 backend/.venv/
 backend/*.sqlite3
 backend/**/*.pyc

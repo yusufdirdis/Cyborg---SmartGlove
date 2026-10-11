@@ -1,0 +1,8 @@
+{
+  "name": "handoff-railway-config",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "railway": "^3.12.0"
+  }
+}
