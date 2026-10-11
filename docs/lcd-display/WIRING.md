@@ -24,7 +24,8 @@ GPIO 22 does not exist on the S3; `Wire.begin()` uses the S3 defaults instead.
 | SDA | GPIO 8 |
 | SCL | GPIO 9 |
 
-- On the HW678, `5Vin` only has 5 V when the USB cable is in the **COM** port, or when the **IN-OUT** solder pads are bridged. Using only the native **USB** port, the LCD stays dark. On 3.3 V the backlight lights but the text is unreadable.
+- On the HW678, `5Vin` is an input only until the **IN-OUT** solder pads are bridged; neither USB port powers it by default (verified on the bench). Bridge IN-OUT so the LCD gets 5 V. On 3.3 V the backlight lights but the text is unreadable. See `hw678-in-out-jumper.jpg` and `hw678-lcd-wiring.jpg`.
+- Plug the USB cable into the **COM** port: with USB CDC on boot disabled, the sketch's `Serial` is the COM port, which is the port `HANDOFF_LCD_PORT` points at.
 - The plain 1602 on the bench has no contrast pot; its contrast is fixed by resistors. If the text is faint on 5 V, add a 1–2.2 kΩ resistor between LCD holes 1 (VSS) and 3 (VO).
 - The onboard RGB LED (GPIO 48) mirrors the backlight colours from SPEC.md (`STATUS_LED_PIN` in the sketch). On some HW678 batches it only works after bridging the small **RGB** solder jumper.
 - The COM port enumerates with the same USB chip type (CH343, `1a86:55d3`) as the servo controller. Set `HANDOFF_SERVO_PORT` to the servo controller's port (e.g. in `backend/.env`) so status checks never confuse the two.
