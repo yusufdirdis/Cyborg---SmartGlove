@@ -17,7 +17,7 @@ def pose(value=0):
     return {str(i): value for i in range(1, 7)}
 
 
-def test_macro_round_trip_and_import_export():
+def test_macro_round_trip():
     with TestClient(app) as client:
         payload = {"name": "Test wave", "description": "Two steps", "kind": "sequence", "steps": [{"positions": pose(1200), "duration_ms": 200}, {"positions": pose(3500), "duration_ms": 200}]}
         created = client.post("/api/macros", json=payload)
@@ -26,14 +26,13 @@ def test_macro_round_trip_and_import_export():
         assert len(created.json()["steps"]) == 2
         payload["name"] = "Edited wave"
         assert client.put(f"/api/macros/{macro_id}", json=payload).json()["name"] == "Edited wave"
-        exported = client.get("/api/macros/export").json()
-        assert exported["version"] == 3
-        assert any(m["name"] == "Edited wave" for m in exported["macros"])
-        assert client.post("/api/macros/import", json={"version": 3, "macros": [payload]}).json() == {"imported": 1}
+        assert any(m["name"] == "Edited wave" for m in client.get("/api/macros").json())
+        assert client.get("/api/macros/export").status_code in (404, 405)
+        assert client.post("/api/macros/import", json={"version": 3, "macros": [payload]}).status_code in (404, 405)
         assert client.delete(f"/api/macros/{macro_id}").status_code == 204
 
 
-def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
+def test_user_servo_ids_keep_finger_meaning():
     with TestClient(app) as client:
         assert client.get("/api/servos").json() == [
             {"id": 1, "name": "Pinky finger"},
@@ -43,20 +42,6 @@ def test_user_servo_ids_and_legacy_import_keep_finger_meaning():
             {"id": 5, "name": "Thumb flexion (up/down)"},
             {"id": 6, "name": "Thumb side-to-side"},
         ]
-        old_positions = {str(i): i * 10 for i in range(1, 7)}
-        payload = {"version": 1, "macros": [{"name": "Legacy mapping check", "description": "", "kind": "pose", "steps": [{"positions": old_positions, "duration_ms": 700}]}]}
-        assert client.post("/api/macros/import", json=payload).json() == {"imported": 1}
-        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Legacy mapping check")
-        assert imported["steps"][0]["positions"] == {"1": 2400, "2": 2000, "3": 800, "4": 400, "5": 1200, "6": 1600}
-
-
-def test_version_two_percent_import_is_converted_to_raw_counts():
-    with TestClient(app) as client:
-        old = {"name": "Percent export", "description": "", "kind": "pose",
-               "steps": [{"positions": pose(75), "duration_ms": 500}]}
-        assert client.post("/api/macros/import", json={"version": 2, "macros": [old]}).status_code == 200
-        imported = next(m for m in client.get("/api/macros").json() if m["name"] == "Percent export")
-        assert imported["steps"][0]["positions"] == pose(3000)
 
 
 def test_existing_macros_are_remapped_once_on_database_upgrade(tmp_path, monkeypatch):

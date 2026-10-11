@@ -91,11 +91,6 @@ class CalibrationInput(BaseModel):
         return self
 
 
-class ImportPayload(BaseModel):
-    version: Literal[1, 2, 3]
-    macros: list[MacroInput] = Field(max_length=100)
-
-
 def db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -520,26 +515,6 @@ def delete_macro(macro_id: str):
     with db() as conn:
         if conn.execute("DELETE FROM macros WHERE id=?", (macro_id,)).rowcount == 0:
             raise HTTPException(404, "Macro not found")
-
-
-@app.get("/api/macros/export")
-def export_macros():
-    return {"version": 3, "macros": [{k: m[k] for k in ("name", "description", "kind", "steps")} for m in macros()]}
-
-
-@app.post("/api/macros/import")
-def import_macros(payload: ImportPayload):
-    with db() as conn:
-        for macro in payload.macros:
-            data = macro.model_dump()
-            if payload.version == 1:
-                for step in data["steps"]:
-                    step["positions"] = remap_legacy_positions(step["positions"])
-            if payload.version in (1, 2):
-                for step in data["steps"]:
-                    step["positions"] = {str(sid): int(value) * 40 for sid, value in step["positions"].items()}
-            save_macro(conn, MacroInput.model_validate(data))
-    return {"imported": len(payload.macros)}
 
 
 @app.post("/api/macros/{macro_id}/play")

@@ -55,7 +55,7 @@ There is no linter or frontend test suite. Run both servers at once. The UI is s
 ## Domain invariants
 
 - There are exactly six servos, with IDs 1–6: pinky, ring, middle, index, thumb flexion, thumb opposition. The glove builder supplied this physical mapping. Every pose must include all six as integer percentages from 0 to 100. JSON keys arrive as strings and Pydantic coerces them.
-- The first release used another ID order. `init_db()` remaps stored macro steps once using SQLite `user_version`; version 1 macro imports are remapped, while version 2 exports use the current ID order. Calibration records stay on their physical IDs.
+- The first release used another ID order. `init_db()` remaps stored macro steps once using SQLite `user_version`. Macro import/export was removed in the UI/UX redesign; only the stored-macro migration remains. Calibration records stay on their physical IDs.
 - A sequence has 1–30 steps, each lasting 100–10,000 ms. A `pose` macro has exactly one step.
 - User-selected app calibration counts run from 0 to 4000. This cap is separate from each glove cord's measured safe travel. The constraints are:
   - min < max

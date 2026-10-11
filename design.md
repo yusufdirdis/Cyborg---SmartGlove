@@ -142,7 +142,7 @@ Tailwind utility breakpoints used inside JSX (`xl:`) follow Tailwind defaults (1
 | Class / pattern | Values | Usage |
 |---|---|---|
 | `.btn.btn-primary` | bg `#171d19`, white, radius 20 px, 12 px weight 800, padding 10/16; disabled opacity .5 | Save, Apply, Start camera, Save calibration |
-| `.btn.btn-secondary` | bg `#f2f5f0`, text `#475b4b` | Cancel, Reset, Set all open, Export/Import, Add step |
+| `.btn.btn-secondary` | bg `#f2f5f0`, text `#475b4b` | Cancel, Reset, Set all open, Add step |
 | `.stop-button` | coral scheme, radius 24 px, weight 800, square icon + "Stop" | Page heading, Dashboard panel head |
 | `.dark-action` | bg `#171d19`, radius 22 px, 11 px weight 800, wide gap, trailing `↗` | "Open manual controls" |
 | `.plain-link` | unstyled text button, 11 px weight 800, underline on hover, trailing `↗` | "Open Macro Studio" |
@@ -200,7 +200,7 @@ Both panels end with a `.panel-note` honesty strip; the first one states that no
 
 ### 4.3 Macro Studio
 
-- Toolbar: **New macro**, **Export** (downloads `handoff-macros.json`), **Import** (hidden file input, `application/json,.json`).
+- Toolbar: **New macro** only. Import and Export were removed in the UI/UX redesign.
 - Table: columns `GESTURE / TYPE / CHANNELS / ACTIONS`; rows show index, name + description, `Pose` or `Sequence · N steps`, six mini bars from the first step, and Play / Edit / Delete buttons. Delete uses a native `window.confirm`. Play is disabled while stopped.
 - The table collapses at ≤850 px (see §2.5).
 

@@ -202,7 +202,7 @@ Pydantic behavior worth distinguishing from the file contract in §3.3:
 - Integer-keyed dicts are coerced from string keys.
 - A 422 response is returned for constraint violations, with FastAPI's standard `detail` array.
 
-Import/export behavior:
+Import/export behavior (**removed in the UI/UX redesign, 2026-10**: the routes and the UI no longer exist; this section and the schema below are kept as history):
 
 | Behavior | Detail |
 |---|---|
@@ -480,7 +480,7 @@ Same request shape as create. Replaces all fields, keeps original `created_at`, 
 
 No response body. Unknown ID → 404.
 
-#### `GET /api/macros/export` → 200
+#### `GET /api/macros/export` → 200 (removed)
 
 ```json
 { "version": 1, "macros": [ { "name": "…", "description": "…", "kind": "pose", "steps": [ { "positions": { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0 }, "duration_ms": 700 } ] } ] }
@@ -488,7 +488,7 @@ No response body. Unknown ID → 404.
 
 IDs and timestamps are omitted. No record cap (§3.2).
 
-#### `POST /api/macros/import` → 200
+#### `POST /api/macros/import` → 200 (removed)
 
 Request: `{"version": 1, "macros": [ … at most 100 … ]}`. Response: `{"imported": 3}`. Always creates copies with new UUIDs; an empty list is accepted and returns `{"imported": 0}`.
 
