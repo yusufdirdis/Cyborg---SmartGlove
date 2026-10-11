@@ -333,6 +333,28 @@ async def require_demo_passcode(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def visitor_provider_keys(request: Request, call_next):
+    """Cloud mode: AI routes use the keys this visitor sent, for this request only."""
+    if not cloud_mode() or not request.url.path.startswith(("/api/assistant/", "/api/settings/")):
+        return await call_next(request)
+    values = {}
+    for name, (key_header, model_header) in assistant.VISITOR_HEADERS.items():
+        provider = assistant.PROVIDERS[name]
+        for header, variable, limit in ((key_header, provider.key_env, 500), (model_header, provider.model_env, 200)):
+            value = request.headers.get(header, "").strip()
+            if not value:
+                continue
+            if len(value) > limit or not SETTING_VALUE.match(value):
+                return JSONResponse(status_code=422, content={"detail": f"The {provider.label} key or model has unsupported characters."})
+            values[variable] = value
+    token = assistant.set_visitor_settings(values)
+    try:
+        return await call_next(request)
+    finally:
+        assistant.reset_visitor_settings(token)
+
+
 # Keep CORS outside the passcode middleware so 401/503 responses still carry
 # the headers browsers need to display the passcode gate instead of a fetch error.
 app.add_middleware(CORSMiddleware, allow_origins=allowed_cors_origins(), allow_methods=["*"], allow_headers=["*"])
@@ -890,7 +912,14 @@ def _local_settings_request(request: Request) -> None:
 
 def _provider_settings_request(request: Request) -> None:
     if cloud_mode():
-        raise HTTPException(403, "Provider keys are managed in Railway variables")
+        raise HTTPException(403, "Keys are kept in your browser in the demo. Nothing is saved on the server.")
+    _local_settings_request(request)
+
+
+def _provider_settings_read(request: Request) -> None:
+    """Listing and testing work in the cloud too: they only use the visitor's own request headers."""
+    if cloud_mode():
+        return
     _local_settings_request(request)
 
 
@@ -907,7 +936,7 @@ def _settings_provider(name: str) -> None:
 
 @app.get("/api/settings/providers")
 def provider_settings(request: Request):
-    _provider_settings_request(request)
+    _provider_settings_read(request)
     return assistant.settings_list()
 
 
@@ -929,7 +958,7 @@ def clear_provider_key(name: str, request: Request):
 
 @app.post("/api/settings/providers/{name}/test")
 async def test_provider_settings(name: str, request: Request):
-    _provider_settings_request(request)
+    _provider_settings_read(request)
     _settings_provider(name)
     return await assistant.test_provider(name)
 

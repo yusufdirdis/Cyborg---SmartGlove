@@ -40,7 +40,7 @@ Why this split:
 1. **The code must be on GitHub.** The Supabase work is on `feat/Database`. If `git ls-remote --heads origin` doesn't list `feat/Database`, stop and ask the owner to push it. Branch from it: `git checkout -b feat/deploy origin/feat/Database`.
 2. **Secrets come from the owner through a private channel** (password manager or DM), never through the repo, an issue, or a PR:
    - `SUPABASE_DB_URL`: the `handoff_app` pooler URL from the owner's `backend/.env`.
-   - The AI keys the demo should use: `GEMINI_API_KEY`, plus optionally `OPENROUTER_API_KEY` and `HF_TOKEN`. Agree who pays: whoever's key is used is billed for the demo traffic.
+   - No AI keys are needed. Visitors enter their own key in Settings, and each is billed for their own usage.
    - `HANDOFF_PASSCODE`: a demo passcode the owner chooses, 12+ characters.
 3. The owner can rotate the `handoff_app` password afterwards: `alter role handoff_app with password '…'` in the Supabase SQL editor, then update the `SUPABASE_DB_URL` variable in Railway.
 
@@ -74,7 +74,10 @@ Keep the changes small, in the existing style, and add tests. Do **not** weaken 
   - no behaviour change when the env var is unset.
 
 ### 3.3 Cloud mode (`HANDOFF_CLOUD=1`)
-- **Settings routes** (`/api/settings/providers*`): return 403 "Provider keys are managed in Railway variables". Railway's disk is ephemeral, and keys must never be writable over the internet. The Settings page should show that message instead of the form.
+- **Settings routes:** visitors bring their own keys.
+  - Listing and Test work, using only the request's own key headers. Saving a key on the server (`PUT`/`DELETE`) returns 403, because Railway's disk is ephemeral and keys must never be stored server-side.
+  - The Settings page keeps keys in the visitor's browser.
+  - This was implemented after the first deploy; see `tests/test_visitor_keys.py`.
 - **Gemini Live routes:** replace `_local_settings_request(request)` with a check that passes when **either** the request is local **or** (cloud mode and the passcode middleware already accepted the request).
   - Keep `/api/assistant/live/proposal` validate-only. It must never move anything, and `tests/test_live.py` enforces that.
 - **Hardware:** leave `_local_hardware_request()` unchanged. In cloud mode, `/api/hardware/status` should return `{"connected": false, "error": "Hardware is only available on the local API."}` without touching `serial.tools.list_ports`.
@@ -119,7 +122,7 @@ Set the service variables in the dashboard, or with `railway variable set` (use 
 | `HANDOFF_PASSCODE` | from the owner, secret |
 | `HANDOFF_CORS_ORIGINS` | the Vercel production URL, for example `https://handoff.vercel.app` (add preview URLs if needed) |
 | `HANDOFF_LIVE_POSITIONS` | `0` |
-| `GEMINI_API_KEY` | secret. Optional: `GEMINI_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `HF_TOKEN`, `HF_MODEL` |
+| AI provider keys | **none.** Each visitor enters their own key in Settings. Any `GEMINI_API_KEY` set here is ignored in cloud mode. |
 | **`HANDOFF_ENABLE_HARDWARE_WRITES`** | **never set this on Railway** |
 
 Then:

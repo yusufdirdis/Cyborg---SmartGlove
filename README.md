@@ -131,10 +131,8 @@ The Railway project is described by [`.railway/railway.ts`](.railway/railway.ts)
 | `HANDOFF_PASSCODE` | Owner-provided demo passcode, at least 12 characters. |
 | `HANDOFF_CORS_ORIGINS` | Comma-separated Vercel production origin and any required preview origins. |
 | `HANDOFF_LIVE_POSITIONS` | `0` |
-| `GEMINI_API_KEY` | Optional server-side provider key; Gemini Live requires it. |
-| `GEMINI_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `HF_TOKEN`, `HF_MODEL` | Optional server-side provider configuration. |
 
-Never set `HANDOFF_ENABLE_HARDWARE_WRITES` on Railway. The cloud API reports hardware unavailable and does not scan serial devices; local-only hardware routes remain guarded. Provider settings return 403 in cloud mode, so keys must be managed as Railway variables. `/api/health` is public for Railway's health check; other API requests require the demo passcode, and the telemetry WebSocket uses the same passcode.
+Never set `HANDOFF_ENABLE_HARDWARE_WRITES` on Railway. The cloud API reports hardware unavailable and does not scan serial devices; local-only hardware routes remain guarded. In cloud mode each visitor enters their **own** AI keys on the Settings page. The keys stay in that browser and are sent only with AI requests (`X-Gemini-Key`, `X-OpenRouter-Key`, `X-HF-Token` and the matching `-Model` headers). The server uses them for that one request and never saves or logs them, and it never falls back to a server key. Saving keys on the server returns 403 in cloud mode, and no provider keys are set on Railway. `/api/health` is public for Railway's health check; other API requests require the demo passcode, and the telemetry WebSocket uses the same passcode.
 
 ### Vercel frontend
 

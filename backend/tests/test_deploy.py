@@ -66,12 +66,10 @@ def test_cloud_without_passcode_fails_closed_but_keeps_health_open(monkeypatch):
 
 
 @pytest.mark.parametrize("method,path,body", [
-    ("get", "/api/settings/providers", None),
     ("put", "/api/settings/providers/gemini", {"model": "gemini-test"}),
     ("delete", "/api/settings/providers/gemini/key", None),
-    ("post", "/api/settings/providers/gemini/test", None),
 ])
-def test_cloud_provider_settings_are_managed_in_railway(monkeypatch, method, path, body):
+def test_cloud_never_saves_provider_keys_on_the_server(monkeypatch, method, path, body):
     monkeypatch.setenv("HANDOFF_CLOUD", "1")
     monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
     with remote_client() as client:
@@ -80,18 +78,20 @@ def test_cloud_provider_settings_are_managed_in_railway(monkeypatch, method, pat
             options["json"] = body
         response = getattr(client, method)(path, **options)
     assert response.status_code == 403
-    assert response.json() == {"detail": "Provider keys are managed in Railway variables"}
+    assert "kept in your browser" in response.json()["detail"]
 
 
 def test_cloud_live_session_accepts_authenticated_remote_request(monkeypatch):
     monkeypatch.setenv("HANDOFF_CLOUD", "1")
     monkeypatch.setenv("HANDOFF_PASSCODE", PASSCODE)
-    monkeypatch.setenv("GEMINI_API_KEY", "AIzaTestKey-1234567890abcdWXYZ")
-    monkeypatch.setattr(assistant, "_sdk_create_token", lambda _key, _config: "auth_tokens/cloud-test")
+    visitor_key = "AIzaVisitorKey-1234567890abcdWXYZ"
+    used = []
+    monkeypatch.setattr(assistant, "_sdk_create_token", lambda key, _config: used.append(key) or "auth_tokens/cloud-test")
     with remote_client() as client:
-        response = client.post("/api/assistant/live/session", headers={"X-Handoff-Passcode": PASSCODE})
+        response = client.post("/api/assistant/live/session", headers={"X-Handoff-Passcode": PASSCODE, "X-Gemini-Key": visitor_key})
     assert response.status_code == 200
     assert response.json()["token"] == "auth_tokens/cloud-test"
+    assert used == [visitor_key] and visitor_key not in response.text
 
 
 def test_cloud_hardware_status_never_scans_and_writes_stay_local(monkeypatch):

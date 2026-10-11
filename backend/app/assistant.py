@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -112,7 +113,31 @@ Use "none" for questions or anything that is not a hand gesture. Never claim the
 {MACROS_MARKER} {json.dumps(macros)}"""
 
 
+# Cloud demo: each visitor brings their own provider keys. They arrive as request headers,
+# live only in this context for that one request, and are never written to disk, the
+# database or logs. Locally there is no visitor context and the .env keys are used.
+_visitor: ContextVar[dict | None] = ContextVar("handoff_visitor_keys", default=None)
+VISITOR_HEADERS = {"gemini": ("x-gemini-key", "x-gemini-model"), "openrouter": ("x-openrouter-key", "x-openrouter-model"),
+                   "huggingface": ("x-hf-token", "x-hf-model")}
+
+
+def set_visitor_settings(values: dict[str, str]):
+    """values maps env-style names (GEMINI_API_KEY, GEMINI_MODEL, ...) to this visitor's settings."""
+    return _visitor.set(values)
+
+
+def reset_visitor_settings(token) -> None:
+    _visitor.reset(token)
+
+
+def visitor_mode() -> bool:
+    return _visitor.get() is not None
+
+
 def _key(name: str) -> str | None:
+    visitor = _visitor.get()
+    if visitor is not None:
+        return visitor.get(name) or None  # a visitor never falls back to the server's keys
     return os.environ.get(name) or None
 
 
@@ -125,6 +150,9 @@ class Provider:
 
     @property
     def model(self) -> str:
+        visitor = _visitor.get()
+        if visitor is not None:
+            return visitor.get(self.model_env) or self.default_model
         return os.environ.get(self.model_env) or self.default_model
 
     def available(self) -> bool:
@@ -275,7 +303,8 @@ async def ask(provider_name: str, message: str, history: list[dict], servo_names
     """Raises KeyError for an unknown provider. Every other failure degrades to text."""
     provider = PROVIDERS[provider_name]
     if not provider.available():
-        return f"{provider.label} has no API key configured on the server. Try another provider or Offline. {TEXT_ONLY}", None
+        where = "Add your own key in Settings" if visitor_mode() else "Add a key in Settings"
+        return f"{provider.label} has no API key yet. {where}, or try Offline. {TEXT_ONLY}", None
     messages = [{"role": t["role"], "content": t["text"]} for t in history[-10:]] + [{"role": "user", "content": message}]
     try:
         text = await asyncio.wait_for(asyncio.to_thread(provider.complete, system_prompt(servo_names, macros), messages), PROVIDER_TIMEOUT_S + 2)
@@ -351,7 +380,8 @@ def settings_list() -> list[dict]:
         provider, key = PROVIDERS[name], _key(PROVIDERS[name].key_env)
         result.append({"name": name, "label": provider.label, "key_set": key is not None,
                        "key_hint": f"••••{key[-4:]}" if key and len(key) >= 8 else ("••••" if key else None),
-                       "model": provider.model, "default_model": provider.default_model})
+                       "model": provider.model, "default_model": provider.default_model,
+                       "storage": "browser" if visitor_mode() else "server"})
     return result
 
 
@@ -388,7 +418,7 @@ async def test_provider(name: str) -> dict:
     provider = _configurable(name)
     key = _key(provider.key_env)
     if key is None:
-        return {"ok": False, "message": "No API key saved.", "latency_ms": None}
+        return {"ok": False, "message": "No API key entered." if visitor_mode() else "No API key saved.", "latency_ms": None}
     started = time.perf_counter()
     try:
         await asyncio.wait_for(asyncio.to_thread(provider.complete, 'Reply only with {"reply": "ok", "action": "none"}.',
